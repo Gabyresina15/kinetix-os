@@ -51,23 +51,33 @@ export function extractSparkReasoningAndJson(messageObj: any): {
   let explicitReasoning: string =
     messageObj?.reasoning_content || messageObj?.reasoning || '';
 
+  // Log raw for debugging (temporary)
+  console.log('[BASETEN RAW CONTENT]', JSON.stringify(rawContent).slice(0, 800));
+  if (messageObj?.reasoning_content) {
+    console.log('[BASETEN REASONING_CONTENT]', String(messageObj.reasoning_content).slice(0, 400));
+  }
+
   let cleanedContent = rawContent;
 
+  // Strip <think> blocks
   const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/i);
   if (thinkMatch) {
     explicitReasoning = (explicitReasoning + '\n' + thinkMatch[1]).trim();
-    cleanedContent = rawContent.replace(/<think>[\s\S]*?<\/think>/i, '').trim();
+    cleanedContent = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   }
 
+  // Strip markdown fences
   cleanedContent = cleanedContent.replace(/```(?:json)?\s*([\s\S]*?)```/gi, '$1').trim();
 
+  // Aggressive brace extraction
   const firstBrace = cleanedContent.indexOf('{');
   const lastBrace = cleanedContent.lastIndexOf('}');
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error(`No valid JSON object in output: ${rawContent.slice(0, 180)}`);
+    throw new Error(`No valid JSON object in output: ${rawContent.slice(0, 300)}`);
   }
 
-  const parsedJson = JSON.parse(cleanedContent.slice(firstBrace, lastBrace + 1));
+  const jsonCandidate = cleanedContent.slice(firstBrace, lastBrace + 1);
+  const parsedJson = JSON.parse(jsonCandidate);
 
   return {
     reasoning:
