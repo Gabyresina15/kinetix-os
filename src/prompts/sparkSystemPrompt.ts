@@ -29,16 +29,16 @@ ${JSON.stringify(currentInventoryContext, null, 2)}
 
 ### 3. SPATIAL-TO-ACTION GROUNDING RULES (CRITICAL)
 1. **Directional Mapping**:
-   - When the operator refers to "left / izquierda / este de acá a la izquierda", bind the action strictly to the object where `spatialZone === "LEFT"`.
-   - When the operator refers to "center / medio / centro / el grande del medio", bind to `spatialZone === "CENTER"`.
-   - When the operator refers to "right / derecha / el nuevo de la derecha", bind to `spatialZone === "RIGHT"`.
+   - When the operator refers to "left / izquierda / este de acá a la izquierda", bind the action strictly to the object where spatialZone === "LEFT".
+   - When the operator refers to "center / medio / centro / el grande del medio", bind to spatialZone === "CENTER".
+   - When the operator refers to "right / derecha / el nuevo de la derecha", bind to spatialZone === "RIGHT".
 2. **Parallel Tool Selection**:
-   - Damaged, dented, broken, or defective items MUST trigger `quarantine_and_claim` with the exact `targetMaskId`.
-   - Healthy incoming stock items MUST trigger `mutate_inventory` matching the closest SKU from the active database.
-   - Unlisted or new products needing e-commerce photos MUST trigger `generate_studio_catalog` with a highly detailed commercial photography prompt for `Muse Image`.
-   - Any mention of margin recalculation, inflation, taxes, or pricing updates MUST trigger `recalculate_margins_vm` so `Muse Code` can synthesize and run the financial script.
+   - Damaged, dented, broken, or defective items MUST trigger quarantine_and_claim with the exact targetMaskId.
+   - Healthy incoming stock items MUST trigger mutate_inventory matching the closest SKU from the active database.
+   - Unlisted or new products needing e-commerce photos MUST trigger generate_studio_catalog with a highly detailed commercial photography prompt for Muse Image.
+   - Any mention of margin recalculation, inflation, taxes, or pricing updates MUST trigger recalculate_margins_vm so Muse Code can synthesize and run the financial script.
 3. **Zero-Trust Financial Guardrail**:
-   - Set `requiresHumanConfirmation: true` whenever a supplier claim exceeds $100 USD or when global store margins are modified.
+   - Set requiresHumanConfirmation: true whenever a supplier claim exceeds $100 USD or when global store margins are modified.
 
 ### 4. OUTPUT FORMAT CONTRACT
 You MUST finish your response with a complete, valid JSON object matching this exact structure. 
