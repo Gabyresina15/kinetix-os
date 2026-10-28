@@ -11,6 +11,7 @@ import {
   executeMuseCodeMarginCalc,
   OrchestrationPlan,
   compileMuseImagePromptFromDna,
+  planFromLiveObjects,
 } from './contracts/orchestratorCore';
 import {
   callBasetenMuseSparkOpen,
@@ -158,7 +159,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             (drafts) => emitSpatialLock(drafts, 'SAM 3.1 + Muse Spark Spatial Vision')
           ),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Baseten timeout > 25000ms')), 25000)
+            setTimeout(() => reject(new Error('Baseten timeout > 45000ms')), 45000)
           ),
         ]);
         console.log('[DETECTED]', liveSpark.plan.detectedObjects?.length || 0);
@@ -174,9 +175,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           JSON.stringify({ timestamp: new Date().toISOString(), liveSpark }, null, 2)
         );
       } catch (liveErr) {
-        console.error('[BASETEN FAIL]', (liveErr as Error).message);
-        console.error('[BASETEN STACK]', (liveErr as Error).stack?.slice(0, 600));
-        app.log.warn(`Live Baseten fallback triggered: ${(liveErr as Error).message}`);
+        const message = (liveErr as Error).message;
+        console.error('[BASETEN FAIL]', message);
+        app.log.warn(`Live Baseten fallback triggered: ${message}`);
+        sparkLatencyMs = Date.now() - startedAt;
+        if (spatialLocked && lockedRawMasks.length) {
+          activePlan = planFromLiveObjects(lockedRawMasks, voiceTranscript);
+          rawReasoning = `Live plan could not be validated (${message}). Tools were bound to the objects already detected.`;
+          sparkModelLabel = 'muse-spark-open-1026 (partial, tools rebound)';
+        }
       }
     }
 
