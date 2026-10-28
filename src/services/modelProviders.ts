@@ -442,28 +442,66 @@ function extractOutputText(data: unknown): string {
   return chunks.join('\n');
 }
 
-function parseSamBox(text: string): [number, number, number, number] | null {
-  const re = /<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)/g;
-  let best: [number, number, number, number] | null = null;
-  let bestArea = 0;
+function readImageSize(dataUrl: string): { w: number; h: number } | null {
+  const encoded = dataUrl.split(',')[1];
+  if (!encoded) return null;
+  const buf = Buffer.from(encoded, 'base64');
+  if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) {
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+  let offset = 2;
+  while (offset + 9 < buf.length) {
+    if (buf[offset] !== 0xff) break;
+    const marker = buf[offset + 1];
+    if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+      return { h: buf.readUInt16BE(offset + 5), w: buf.readUInt16BE(offset + 7) };
+    }
+    if (offset + 4 > buf.length) break;
+    const size = buf.readUInt16BE(offset + 2);
+    if (size < 2) break;
+    offset += 2 + size;
+  }
+  return null;
+}
+
+function parseSamBoxes(text: string): Map<number, [number, number, number, number]> {
+  const found = new Map<number, [number, number, number, number]>();
+  const re = /(\d+)<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)/g;
   for (const match of text.matchAll(re)) {
-    const x1 = Number(match[1]);
-    const y1 = Number(match[2]);
-    const x2 = Number(match[3]);
-    const y2 = Number(match[4]);
-    const w = Number(match[5]);
-    const h = Number(match[6]);
+    const id = Number(match[1]);
+    const x1 = Number(match[2]);
+    const y1 = Number(match[3]);
+    const x2 = Number(match[4]);
+    const y2 = Number(match[5]);
+    const w = Number(match[6]);
+    const h = Number(match[7]);
     if (w < 2 || h < 2 || x2 <= x1 || y2 <= y1) continue;
-    const area = (x2 - x1) * (y2 - y1);
-    if (area <= bestArea) continue;
-    bestArea = area;
     const nx = Math.min(0.98, Math.max(0, x1 / w));
     const ny = Math.min(0.98, Math.max(0, y1 / h));
     const nw = Math.min(1 - nx, Math.max(0.02, (x2 - x1) / w));
     const nh = Math.min(1 - ny, Math.max(0.02, (y2 - y1) / h));
-    best = [Number(nx.toFixed(3)), Number(ny.toFixed(3)), Number(nw.toFixed(3)), Number(nh.toFixed(3))];
+    found.set(id, [Number(nx.toFixed(3)), Number(ny.toFixed(3)), Number(nw.toFixed(3)), Number(nh.toFixed(3))]);
   }
-  return best;
+  return found;
+}
+
+async function readSamOutput(response: Response): Promise<string> {
+  const raw = await response.text();
+  if (!raw.includes('data:')) return raw;
+  let text = '';
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const event = JSON.parse(payload) as { delta?: string; output_text?: string; text?: string };
+      text += event.delta || event.output_text || event.text || '';
+    } catch {
+      text += payload;
+    }
+  }
+  return text || raw;
 }
 
 export async function refineMasksWithSam31<T extends SamMask>(
@@ -472,70 +510,77 @@ export async function refineMasksWithSam31<T extends SamMask>(
 ): Promise<{ masks: T[]; used: boolean; latencyMs: number; refined: number }> {
   const started = Date.now();
   const apiKey = process.env.META_MODEL_API_KEY;
-  if (!apiKey || !frameBase64?.startsWith('data:image') || masks.length === 0) {
+  const actionable = masks.filter((mask) => !mask.isSensitivePII);
+  const size = frameBase64 ? readImageSize(frameBase64) : null;
+  if (!apiKey || !frameBase64?.startsWith('data:image') || actionable.length === 0 || !size) {
     return { masks, used: false, latencyMs: 0, refined: 0 };
   }
 
   const endpoint = process.env.META_SAM_URL || 'https://api.meta.ai/v1/responses';
   const model = process.env.META_SAM_MODEL || 'sam-3.1';
-
-  const refinedMasks = await Promise.all(
-    masks.map(async (mask) => {
-      if (mask.isSensitivePII) return mask;
-      try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          signal: AbortSignal.timeout(8000),
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            model,
-            stream: false,
-            input: [
-              {
-                type: 'message',
-                role: 'user',
-                content: [
-                  { type: 'input_text', text: mask.label },
-                  { type: 'input_image', image_url: frameBase64 },
-                ],
-              },
-            ],
-          }),
-        });
-        if (!response.ok) {
-          const errText = await response.text();
-          console.warn(`[SAM 3.1] ${mask.label} HTTP ${response.status}: ${errText.slice(0, 180)}`);
-          return mask;
-        }
-        const data = await response.json();
-        const raw = JSON.stringify(data);
-        const box = parseSamBox(raw);
-        if (!box) {
-          const output = Array.isArray((data as { output?: unknown[] }).output)
-            ? (data as { output: Array<{ type?: string }> }).output.map((item) => item?.type || 'item').join(',')
-            : Object.keys((data as object) || {}).join(',');
-          console.warn(`[SAM 3.1] ${mask.label} no box. shape=${output} body=${raw.slice(0, 500)}`);
-          return mask;
-        }
-        return { ...mask, bbox: box };
-      } catch (err) {
-        console.warn(`[SAM 3.1] ${mask.label} failed`, (err as Error).message);
-        return mask;
-      }
+  const prompt = `<0f>${actionable
+    .map((mask, index) => {
+      const x1 = Math.round(mask.bbox[0] * size.w);
+      const y1 = Math.round(mask.bbox[1] * size.h);
+      const x2 = Math.max(x1 + 2, Math.round((mask.bbox[0] + mask.bbox[2]) * size.w));
+      const y2 = Math.max(y1 + 2, Math.round((mask.bbox[1] + mask.bbox[3]) * size.h));
+      return `${index + 1}<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${size.w};h=${size.h}|>`;
     })
-  );
+    .join(',')}`;
 
-  const refined = refinedMasks.filter((mask, index) => mask.bbox.join(',') !== masks[index].bbox.join(',')).length;
-  return {
-    masks: refinedMasks,
-    used: refined > 0,
-    latencyMs: Date.now() - started,
-    refined,
-  };
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: [
+              { type: 'input_text', text: prompt },
+              { type: 'input_image', image_url: frameBase64 },
+            ],
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn(`[SAM 3.1] HTTP ${response.status}: ${errText.slice(0, 220)}`);
+      return { masks, used: false, latencyMs: Date.now() - started, refined: 0 };
+    }
+
+    const output = await readSamOutput(response);
+    const boxes = parseSamBoxes(output);
+    const returnedIds = new Set(boxes.keys());
+    const idsMatch = actionable.every((_, index) => returnedIds.has(index + 1));
+    let refined = 0;
+    const refinedMasks = masks.map((mask) => {
+      if (mask.isSensitivePII) return mask;
+      const index = actionable.indexOf(mask);
+      const box = idsMatch ? boxes.get(index + 1) : boxes.get(index) || boxes.get(index + 1);
+      if (!box) return mask;
+      refined += 1;
+      return { ...mask, bbox: box };
+    });
+    if (refined === 0) {
+      console.warn(`[SAM 3.1] no boxes from prompt. output=${output.slice(0, 240)}`);
+    } else {
+      console.log(`[SAM 3.1] tightened ${refined}/${actionable.length} boxes`);
+    }
+    return { masks: refinedMasks, used: refined > 0, latencyMs: Date.now() - started, refined };
+  } catch (err) {
+    console.warn('[SAM 3.1] failed', (err as Error).message);
+    return { masks, used: false, latencyMs: Date.now() - started, refined: 0 };
+  }
 }
 
 export async function callMuseCodeGenerator(
