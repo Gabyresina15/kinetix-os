@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { OrchestrationPlan, OrchestrationPlanSchema } from '../contracts/orchestratorCore';
+import { OrchestrationPlan, OrchestrationPlanSchema, salvageOrchestrationPlan } from '../contracts/orchestratorCore';
 
 export const RAW_WAREHOUSE_CROP_FALLBACK_URI =
   'data:image/svg+xml;utf8,' +
@@ -75,17 +75,61 @@ export function extractSparkReasoningAndJson(messageObj: any): {
   console.log('[BASETEN RAW CONTENT]', JSON.stringify(rawContent).slice(0, 600));
   console.log('[BASETEN REASONING_CONTENT]', JSON.stringify(reasoningContent).slice(0, 800));
 
-  const searchPool = (rawContent.trim() || reasoningContent).trim();
+  const pools = [rawContent, reasoningContent, `${rawContent}\n${reasoningContent}`].filter((p) => p.trim());
   const explicitReasoning = reasoningContent || rawContent;
+  let best: { score: number; parsed: unknown } | null = null;
 
+  for (const searchPool of pools) {
+    const candidates = collectJsonCandidates(searchPool);
+    for (const candidate of candidates) {
+      try {
+        const cleaned = candidate.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']').trim();
+        const parsed = JSON.parse(cleaned);
+        if (!parsed || typeof parsed !== 'object') continue;
+        const score =
+          (Array.isArray((parsed as any).actions) ? (parsed as any).actions.length * 10 : 0) +
+          (Array.isArray((parsed as any).detectedObjects) ? (parsed as any).detectedObjects.length : 0) +
+          ((parsed as any).summary ? 1 : 0);
+        if (score > 0 && (!best || score > best.score)) best = { score, parsed };
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  if (!best) {
+    const preview = (rawContent || reasoningContent).slice(0, 500);
+    throw new Error(`No valid JSON object in output: ${preview}`);
+  }
+
+  return {
+    reasoning: explicitReasoning.trim() || 'Spatial plan locked.',
+    parsedJson: best.parsed,
+  };
+}
+
+function collectJsonCandidates(searchPool: string): string[] {
   const candidates: string[] = [];
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escape = false;
   for (let i = 0; i < searchPool.length; i++) {
-    if (searchPool[i] === '{') {
+    const c = searchPool[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '{') {
       if (depth === 0) start = i;
       depth++;
-    } else if (searchPool[i] === '}') {
+    } else if (c === '}') {
       depth--;
       if (depth === 0 && start !== -1) {
         candidates.push(searchPool.slice(start, i + 1));
@@ -93,32 +137,17 @@ export function extractSparkReasoningAndJson(messageObj: any): {
       }
     }
   }
-
-  const lastOpen = searchPool.lastIndexOf('{');
-  const lastClose = searchPool.lastIndexOf('}');
-  if (lastOpen !== -1 && lastClose > lastOpen) {
-    candidates.push(searchPool.slice(lastOpen, lastClose + 1));
+  if (start !== -1) {
+    let truncated = searchPool.slice(start).replace(/,\s*$/, '');
+    const opens = (truncated.match(/\{/g) || []).length;
+    const closes = (truncated.match(/\}/g) || []).length;
+    const openArr = (truncated.match(/\[/g) || []).length;
+    const closeArr = (truncated.match(/\]/g) || []).length;
+    truncated += ']'.repeat(Math.max(0, openArr - closeArr));
+    truncated += '}'.repeat(Math.max(0, opens - closes));
+    candidates.push(truncated);
   }
-
-  for (const candidate of candidates) {
-    try {
-      const cleaned = candidate
-        .replace(/,\s*}/g, '}')
-        .replace(/,\s*]/g, ']')
-        .trim();
-      const parsed = JSON.parse(cleaned);
-      if (parsed && typeof parsed === 'object' && (parsed.summary || parsed.detectedObjects || parsed.actions)) {
-        return {
-          reasoning: explicitReasoning.trim() || 'Spatial plan locked.',
-          parsedJson: parsed,
-        };
-      }
-    } catch {
-      // try next
-    }
-  }
-
-  throw new Error(`No valid JSON object in output: ${searchPool.slice(0, 500)}`);
+  return candidates;
 }
 
 export interface DetectedObjectDraft {
@@ -300,14 +329,29 @@ export async function callBasetenMuseSparkOpen(
     notify(content, reasoning);
   }
 
-  const { reasoning: parsedReasoning, parsedJson } = extractSparkReasoningAndJson({
-    content,
-    reasoning_content: reasoning,
-  });
+  let parsedReasoning = reasoning || content || 'Spatial plan locked.';
+  let parsedJson: unknown = null;
+  try {
+    const extracted = extractSparkReasoningAndJson({
+      content,
+      reasoning_content: reasoning,
+    });
+    parsedReasoning = extracted.reasoning;
+    parsedJson = extracted.parsedJson;
+  } catch (err) {
+    console.warn('[SPARK JSON]', (err as Error).message);
+  }
 
   if (!spatialNotified) notify(content, reasoning);
 
-  const validatedPlan = OrchestrationPlanSchema.parse(parsedJson);
+  const strict = parsedJson ? OrchestrationPlanSchema.safeParse(parsedJson) : null;
+  const validatedPlan = strict?.success ? strict.data : salvageOrchestrationPlan(parsedJson);
+  if (!validatedPlan || validatedPlan.actions.length === 0) {
+    throw new Error('Spark JSON did not contain a usable action plan');
+  }
+  if (strict && !strict.success) {
+    console.warn('[SPARK SALVAGED]', strict.error.issues.slice(0, 3));
+  }
 
   return {
     plan: validatedPlan,
