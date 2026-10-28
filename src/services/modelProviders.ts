@@ -411,6 +411,127 @@ export async function callMuseImageStudioSynthesis(prompt: string): Promise<{
   }
 }
 
+type SamMask = {
+  id: string;
+  label: string;
+  bbox: [number, number, number, number];
+  isSensitivePII?: boolean;
+};
+
+function extractOutputText(data: unknown): string {
+  const chunks: string[] = [];
+  const walk = (node: unknown) => {
+    if (!node) return;
+    if (typeof node === 'string') {
+      chunks.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node === 'object') {
+      const record = node as Record<string, unknown>;
+      if (typeof record.text === 'string') chunks.push(record.text);
+      if (typeof record.output_text === 'string') chunks.push(record.output_text);
+      if (record.content) walk(record.content);
+      if (record.output) walk(record.output);
+    }
+  };
+  walk(data);
+  return chunks.join('\n');
+}
+
+function parseSamBox(text: string): [number, number, number, number] | null {
+  const re = /<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)/g;
+  let best: [number, number, number, number] | null = null;
+  let bestArea = 0;
+  for (const match of text.matchAll(re)) {
+    const x1 = Number(match[1]);
+    const y1 = Number(match[2]);
+    const x2 = Number(match[3]);
+    const y2 = Number(match[4]);
+    const w = Number(match[5]);
+    const h = Number(match[6]);
+    if (w < 2 || h < 2 || x2 <= x1 || y2 <= y1) continue;
+    const area = (x2 - x1) * (y2 - y1);
+    if (area <= bestArea) continue;
+    bestArea = area;
+    const nx = Math.min(0.98, Math.max(0, x1 / w));
+    const ny = Math.min(0.98, Math.max(0, y1 / h));
+    const nw = Math.min(1 - nx, Math.max(0.02, (x2 - x1) / w));
+    const nh = Math.min(1 - ny, Math.max(0.02, (y2 - y1) / h));
+    best = [Number(nx.toFixed(3)), Number(ny.toFixed(3)), Number(nw.toFixed(3)), Number(nh.toFixed(3))];
+  }
+  return best;
+}
+
+export async function refineMasksWithSam31<T extends SamMask>(
+  frameBase64: string | null | undefined,
+  masks: T[]
+): Promise<{ masks: T[]; used: boolean; latencyMs: number; refined: number }> {
+  const started = Date.now();
+  const apiKey = process.env.META_MODEL_API_KEY;
+  if (!apiKey || !frameBase64?.startsWith('data:image') || masks.length === 0) {
+    return { masks, used: false, latencyMs: 0, refined: 0 };
+  }
+
+  const endpoint = process.env.META_SAM_URL || 'https://api.meta.ai/v1/responses';
+  const model = process.env.META_SAM_MODEL || 'sam-3.1';
+
+  const refinedMasks = await Promise.all(
+    masks.map(async (mask) => {
+      if (mask.isSensitivePII) return mask;
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          signal: AbortSignal.timeout(8000),
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            stream: false,
+            input: [
+              {
+                type: 'message',
+                role: 'user',
+                content: [
+                  { type: 'input_text', text: mask.label },
+                  { type: 'input_image', image_url: frameBase64 },
+                ],
+              },
+            ],
+          }),
+        });
+        if (!response.ok) {
+          const errText = await response.text();
+          console.warn(`[SAM 3.1] ${mask.label} HTTP ${response.status}: ${errText.slice(0, 180)}`);
+          return mask;
+        }
+        const box = parseSamBox(extractOutputText(await response.json()));
+        if (!box) {
+          console.warn(`[SAM 3.1] ${mask.label} returned no box`);
+          return mask;
+        }
+        return { ...mask, bbox: box };
+      } catch (err) {
+        console.warn(`[SAM 3.1] ${mask.label} failed`, (err as Error).message);
+        return mask;
+      }
+    })
+  );
+
+  const refined = refinedMasks.filter((mask, index) => mask.bbox.join(',') !== masks[index].bbox.join(',')).length;
+  return {
+    masks: refinedMasks,
+    used: refined > 0,
+    latencyMs: Date.now() - started,
+    refined,
+  };
+}
+
 export async function callMuseCodeGenerator(
   targetMarginPercent: number,
   taxRatePercent: number
