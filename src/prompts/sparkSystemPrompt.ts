@@ -13,11 +13,18 @@ export function buildMuseSparkSystemPrompt(
 You receive ANY live workspace image and ANY natural voice command from an operator.
 
 ### 1. UNIVERSAL SPATIAL DETECTION & GROUNDING (CRITICAL)
-CRITICAL: You are looking at a top-down photo of PC components on a dark surface. Detect the objects you actually see (box, RAM sticks, motherboard, GPU, case, pliers, CPU cooler). Do not invent objects that are not in the image.
+You MUST detect objects from the attached image. This is mandatory.
+
+CRITICAL RULES:
+- Always return at least 3 objects in detectedObjects. Empty array = invalid response.
+- Look at the image carefully. Typical objects in this scene: pliers (blue handles), RAM sticks, GPU/graphics card, PC case, motherboard, CPU cooler, boxes.
+- Do NOT invent objects that are not visible.
+- Bounding boxes must be normalized [xMin, yMin, width, height] between 0.0 and 1.0.
+- Assign clear ids like "mask_pliers", "mask_ram", "mask_gpu", etc.
 
 1. Inspect the Image First:
    - Identify ALL distinct physical objects visible in the attached workspace image.
-   - Return them in the detectedObjects array with normalized bounding boxes [xMin, yMin, width, height] (values strictly between 0.00 and 1.00).
+   - Return them in the detectedObjects array.
    - If you detect any ID card, credit card, sensitive paper, or human face, set "isSensitivePII": true.
 2. Bind Voice Intent to Detected Objects:
    - Match the operator's voice command to the exact id you generated in detectedObjects.
@@ -27,8 +34,6 @@ CRITICAL: You are looking at a top-down photo of PC components on a dark surface
    - Stock additions -> mutate_inventory with its targetMaskId. Use existing SKU if matched, otherwise create a new SKU.
    - Catalog photo -> generate_studio_catalog with its targetMaskId and populate visualDna from the real object.
    - Margin recalculation -> recalculate_margins_vm.
-
-If detectedObjects is empty, the response is invalid. Always return at least 3 objects from the image.
 
 ### 2. CURRENT ERP INVENTORY LEDGER
 ${JSON.stringify(currentInventoryContext, null, 2)}
@@ -41,44 +46,58 @@ ${JSON.stringify(
 )}
 
 ### 4. OUTPUT JSON CONTRACT
-CRITICAL: Your entire response must be a single valid JSON object starting with { and ending with }. No text before or after. No markdown fences. If you cannot detect objects, still return a valid JSON with an empty detectedObjects array and the actions.
+CRITICAL: Your entire response must be a single valid JSON object starting with { and ending with }. No text before or after. No markdown fences. No reasoning outside the JSON.
 
 {
   "detectedObjects": [
     {
-      "id": "mask_01",
-      "label": "Exact visual name of object 1",
-      "bbox": [0.10, 0.25, 0.22, 0.45],
+      "id": "mask_pliers",
+      "label": "Blue handled pliers",
+      "bbox": [0.08, 0.55, 0.12, 0.22],
+      "confidence": 0.97,
+      "isSensitivePII": false
+    },
+    {
+      "id": "mask_ram",
+      "label": "DDR5 RAM modules",
+      "bbox": [0.22, 0.62, 0.18, 0.15],
       "confidence": 0.98,
+      "isSensitivePII": false
+    },
+    {
+      "id": "mask_gpu",
+      "label": "Graphics card / GPU",
+      "bbox": [0.45, 0.48, 0.28, 0.25],
+      "confidence": 0.96,
       "isSensitivePII": false
     }
   ],
-  "summary": "Brief tactical summary",
+  "summary": "Brief tactical summary based on voice + detected objects",
   "requiresHumanConfirmation": true,
   "actions": [
     {
       "tool": "quarantine_and_claim",
-      "targetMaskId": "mask_01",
-      "defectReason": "Specific visual defect",
-      "claimAmountUsd": 145.00
+      "targetMaskId": "mask_pliers",
+      "defectReason": "Damaged tool reported",
+      "claimAmountUsd": 45.00
     },
     {
       "tool": "mutate_inventory",
-      "targetMaskId": "mask_02",
-      "sku": "SKU-NEW-01",
-      "itemName": "Real Object Name",
-      "delta": 1,
-      "unitCostUsd": 50.00
+      "targetMaskId": "mask_ram",
+      "sku": "SKU-DDR5-32GB-KIT",
+      "itemName": "Fury Beast DDR5 32GB",
+      "delta": 2,
+      "unitCostUsd": 95.00
     },
     {
       "tool": "generate_studio_catalog",
-      "targetMaskId": "mask_03",
-      "productTitle": "Commercial Title",
+      "targetMaskId": "mask_gpu",
+      "productTitle": "Detected Graphics Card",
       "visualDna": {
-        "containerGeometry": "exact 3D shape",
-        "exactColorPalette": "exact colors",
-        "detectedBrandOrText": "visible text",
-        "surfaceMaterial": "physical material"
+        "containerGeometry": "triple fan graphics card",
+        "exactColorPalette": "black with RGB lighting",
+        "detectedBrandOrText": "GEFORCE RTX",
+        "surfaceMaterial": "metal shroud with plastic fans"
       }
     },
     {
