@@ -464,6 +464,30 @@ function readImageSize(dataUrl: string): { w: number; h: number } | null {
   return null;
 }
 
+function boxesAreSameObject(
+  original: [number, number, number, number],
+  refined: [number, number, number, number]
+): boolean {
+  const area = (box: [number, number, number, number]) => Math.max(0, box[2]) * Math.max(0, box[3]);
+  const originalArea = area(original);
+  const refinedArea = area(refined);
+  if (originalArea < 0.0004 || refinedArea < 0.0004) return false;
+  const x1 = Math.max(original[0], refined[0]);
+  const y1 = Math.max(original[1], refined[1]);
+  const x2 = Math.min(original[0] + original[2], refined[0] + refined[2]);
+  const y2 = Math.min(original[1] + original[3], refined[1] + refined[3]);
+  const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const centerX = refined[0] + refined[2] / 2;
+  const centerY = refined[1] + refined[3] / 2;
+  const centerInside =
+    centerX >= original[0] - original[2] * 0.15 &&
+    centerX <= original[0] + original[2] * 1.15 &&
+    centerY >= original[1] - original[3] * 0.15 &&
+    centerY <= original[1] + original[3] * 1.15;
+  const areaRatio = refinedArea / originalArea;
+  return centerInside && overlap / refinedArea >= 0.5 && areaRatio >= 0.25 && areaRatio <= 1.65;
+}
+
 function parseSamBoxes(text: string): Map<number, [number, number, number, number]> {
   const found = new Map<number, [number, number, number, number]>();
   const re = /(\d+)<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)/g;
@@ -563,19 +587,19 @@ export async function refineMasksWithSam31<T extends SamMask>(
     const returnedIds = new Set(boxes.keys());
     const idsMatch = actionable.every((_, index) => returnedIds.has(index + 1));
     let refined = 0;
+    let rejected = 0;
     const refinedMasks = masks.map((mask) => {
       if (mask.isSensitivePII) return mask;
       const index = actionable.indexOf(mask);
       const box = idsMatch ? boxes.get(index + 1) : boxes.get(index) || boxes.get(index + 1);
-      if (!box) return mask;
+      if (!box || !boxesAreSameObject(mask.bbox, box)) {
+        if (box) rejected += 1;
+        return mask;
+      }
       refined += 1;
       return { ...mask, bbox: box };
     });
-    if (refined === 0) {
-      console.warn(`[SAM 3.1] no boxes from prompt. output=${output.slice(0, 240)}`);
-    } else {
-      console.log(`[SAM 3.1] tightened ${refined}/${actionable.length} boxes`);
-    }
+    console.log(`[SAM 3.1] kept ${refined}/${actionable.length} boxes, rejected ${rejected} that left the Spark region`);
     return { masks: refinedMasks, used: refined > 0, latencyMs: Date.now() - started, refined };
   } catch (err) {
     console.warn('[SAM 3.1] failed', (err as Error).message);
