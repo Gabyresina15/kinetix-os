@@ -241,17 +241,22 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
-    const sam = await refineMasksWithSam31(body.frameBase64, finalMasks);
+    const sam =
+      process.env.ENABLE_SAM_REFINEMENT === 'true'
+        ? await refineMasksWithSam31(body.frameBase64, finalMasks)
+        : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
 
     const cropStartedAt = Date.now();
     const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, sam.masks);
-    const cropLatencyMs = Date.now() - cropStartedAt;
+    const cropLatencyMs = Math.max(1, Date.now() - cropStartedAt);
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
+    const piiStartedAt = Date.now();
     const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
+    const piiLatencyMs = Math.max(1, Date.now() - piiStartedAt);
 
     sendEvent('EDGE_PII_SHIELD', {
       model: 'muse-spark-open-1026',
-      latencyMs: Math.max(1, Date.now() - startedAt),
+      latencyMs: piiLatencyMs,
       redactedMasks: piiMasks.map((o) => ({ id: o.id, bbox: o.bbox })),
     });
     sendEvent('SPATIAL_LOCK', {
@@ -281,7 +286,17 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       plan: activePlan,
     });
 
-    for (const action of activePlan.actions) {
+    const ACTION_PRIORITY: Record<string, number> = {
+      quarantine_and_claim: 1,
+      mutate_inventory: 2,
+      recalculate_margins_vm: 3,
+      generate_studio_catalog: 4,
+    };
+    const orderedActions = [...activePlan.actions].sort(
+      (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
+    );
+
+    for (const action of orderedActions) {
       await new Promise((r) => setTimeout(r, 260));
 
       if (action.tool === 'quarantine_and_claim') {
@@ -366,8 +381,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
         let studioUrl = STUDIO_RENDER_FALLBACK_URI;
         let usedLive = false;
+        let synthesisLatencyMs = 0;
         if (mode === 'LIVE' && process.env.META_MODEL_API_KEY) {
+          const imageStartedAt = Date.now();
           const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt);
+          synthesisLatencyMs = Date.now() - imageStartedAt;
           studioUrl = synth.imageUrl;
           usedLive = synth.usedLiveApi;
         }
@@ -396,6 +414,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           modelUsed: 'Muse Image',
           studioImageUrl: studioUrl,
           usedLiveApi: usedLive,
+          synthesisLatencyMs,
           status: 'PUBLISHED_TO_STORE',
         };
         LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
