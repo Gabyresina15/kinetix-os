@@ -106,6 +106,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
     if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
       try {
+        console.log('[LIVE] Calling Baseten | image:', Boolean(body.frameBase64), '| chars:', body.frameBase64?.length || 0);
         const liveSpark = await Promise.race([
           callBasetenMuseSparkOpen(systemPrompt, voiceTranscript, body.frameBase64),
           new Promise<never>((_, reject) =>
@@ -125,6 +126,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           JSON.stringify({ timestamp: new Date().toISOString(), liveSpark }, null, 2)
         );
       } catch (liveErr) {
+        console.error('[BASETEN FAIL]', (liveErr as Error).message);
+        console.error('[BASETEN STACK]', (liveErr as Error).stack?.slice(0, 600));
         app.log.warn(`Live Baseten fallback triggered: ${(liveErr as Error).message}`);
       }
     }
