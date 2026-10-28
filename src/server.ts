@@ -241,10 +241,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
-    const sam =
-      process.env.ENABLE_SAM_REFINEMENT === 'true'
-        ? await refineMasksWithSam31(body.frameBase64, finalMasks)
-        : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
+    const sam = await refineMasksWithSam31(body.frameBase64, finalMasks);
 
     const cropStartedAt = Date.now();
     const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, sam.masks);
