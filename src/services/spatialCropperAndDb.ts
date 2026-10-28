@@ -5,17 +5,20 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 let persistenceDb: any = null;
+let mongoUnavailableUntil = 0;
 
 export async function getPersistenceDb(): Promise<any> {
   if (persistenceDb) return persistenceDb;
+  if (Date.now() < mongoUnavailableUntil) return null;
   try {
     const { MongoClient } = await import('mongodb');
     const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    const client = new MongoClient(uri);
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
     await client.connect();
     persistenceDb = client.db('kinetix');
     return persistenceDb;
   } catch {
+    mongoUnavailableUntil = Date.now() + 30_000;
     return null;
   }
 }
@@ -40,7 +43,8 @@ export async function persistErpMutation(collection: string, doc: any): Promise<
 
 export async function extractRealCropsFromFrame(
   frameBase64: string | null | undefined,
-  masks: RawSamMask[]
+  masks: RawSamMask[],
+  targetIds?: Set<string>
 ): Promise<RawSamMask[]> {
   if (!frameBase64 || !frameBase64.startsWith('data:image')) return masks;
 
@@ -55,6 +59,7 @@ export async function extractRealCropsFromFrame(
     const updated = await Promise.all(
       masks.map(async (mask) => {
         if (mask.isSensitivePII) return { ...mask, cropBase64: 'REDACTED' };
+        if (targetIds && !targetIds.has(mask.id)) return mask;
         const [x, y, w, h] = mask.bbox;
         const left = Math.max(0, Math.floor(x * imgW));
         const top = Math.max(0, Math.floor(y * imgH));
@@ -78,52 +83,77 @@ export async function extractRealCropsFromFrame(
   }
 }
 
+const fmtBbox = (bbox: [number, number, number, number]) =>
+  `[${bbox.map((n) => Number(n).toFixed(2)).join(', ')}]`;
+
 export function sanitizeReasoningToTelemetry(
   rawReasoning: string,
   detectedObjects: NormalizedSpatialObject[] = [],
   plan: OrchestrationPlan = { actions: [], summary: '', requiresHumanConfirmation: true }
 ): string {
-  const actionableCount = detectedObjects.filter((o) => !o.isSensitivePII).length;
-  const piiCount = detectedObjects.filter((o) => o.isSensitivePII).length;
+  const actions: any[] = plan.actions || [];
+  const actionable = detectedObjects.filter((o) => !o.isSensitivePII);
+  const piiCount = detectedObjects.length - actionable.length;
+  const findObj = (id: string) => detectedObjects.find((o) => o.id === id);
+  const nameOf = (id: string) => findObj(id)?.label || id;
 
-  const boundTargets = (plan.actions || [])
-    .map((a: any) => {
-      if (a.targetMaskId) {
-        const matched = detectedObjects.find((o) => o.id === a.targetMaskId);
-        return matched ? `${matched.label} (${a.tool})` : `${a.targetMaskId} (${a.tool})`;
+  const lines: string[] = [];
+
+  lines.push(
+    `[SCENE_GRAPH] Indexed ${actionable.length} physical object(s), ${piiCount} PII shield(s)` +
+      (actionable.length
+        ? `: ${actionable.map((o) => `${o.label} ${fmtBbox(o.bbox)}`).join(' | ')}.`
+        : '.')
+  );
+
+  for (const a of actions) {
+    switch (a.tool) {
+      case 'quarantine_and_claim': {
+        const obj = findObj(a.targetMaskId);
+        const where = obj ? ` @ ${obj.spatialRegion2D}` : '';
+        lines.push(
+          `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)}${where} -> quarantine_and_claim: "${a.defectReason}".`
+        );
+        const amount = Number(a.claimAmountUsd);
+        lines.push(
+          `[GUARDRAIL_AUDIT] Claim $${amount.toFixed(2)} -> ${amount > 100 ? 'HELD (> $100, operator confirmation required)' : 'AUTO_APPROVED'}.`
+        );
+        break;
       }
-      return `Global (${a.tool})`;
-    })
-    .join(' | ');
-
-  const catalogAction = (plan.actions || []).find((a: any) => a.tool === 'generate_studio_catalog') as any;
-  const claimAction = (plan.actions || []).find((a: any) => a.tool === 'quarantine_and_claim') as any;
-
-  const cleanThought = (rawReasoning || '')
-    .replace(/we need to decide[^.]*\./gi, '')
-    .replace(/let's assume[^.]*\./gi, '')
-    .replace(/i think[^.]*\./gi, '')
-    .replace(/\n+/g, ' ')
-    .trim();
-
-  const lines: string[] = [
-    `[SCENE_GRAPH] Indexed ${actionableCount} physical objects (${piiCount} PII shields).`,
-    `[SEMANTIC_BINDING] ${boundTargets || 'Bound voice intent to scene graph.'}`,
-  ];
-
-  if (catalogAction?.visualDna) {
-    lines.push(
-      `[VISUAL_DNA] ${catalogAction.targetMaskId}: "${catalogAction.visualDna.containerGeometry}" (${catalogAction.visualDna.exactColorPalette}).`
-    );
+      case 'mutate_inventory': {
+        const sign = Number(a.delta) >= 0 ? '+' : '';
+        lines.push(
+          `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)} -> mutate_inventory: ${a.sku} ${sign}${a.delta} @ $${Number(a.unitCostUsd).toFixed(2)}/u.`
+        );
+        break;
+      }
+      case 'generate_studio_catalog': {
+        lines.push(
+          `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)} -> generate_studio_catalog: "${a.productTitle}".`
+        );
+        const dna = a.visualDna;
+        if (dna) {
+          lines.push(
+            `[VISUAL_DNA] ${a.targetMaskId}: ${dna.containerGeometry} | ${dna.exactColorPalette} | "${dna.detectedBrandOrText}" | ${dna.surfaceMaterial}.`
+          );
+        }
+        break;
+      }
+      case 'recalculate_margins_vm':
+        lines.push(
+          `[SEMANTIC_BINDING] Global -> recalculate_margins_vm: margin ${a.targetMarginPercent}% + tax ${a.taxRatePercent}%.`
+        );
+        break;
+    }
   }
 
-  if (claimAction) {
-    const status = claimAction.claimAmountUsd > 100 ? 'HELD (> $100)' : 'AUTO_APPROVED';
-    lines.push(`[GUARDRAIL_AUDIT] Claim $${Number(claimAction.claimAmountUsd).toFixed(2)} -> ${status}.`);
+  if (!actions.length) {
+    lines.push('[SEMANTIC_BINDING] No tool actions requested by the operator for this scene.');
   }
 
-  if (cleanThought) {
-    lines.push(`[SPARK_TRACE] ${cleanThought.slice(0, 280)}`);
+  const trace = (rawReasoning || '').replace(/\s+/g, ' ').trim();
+  if (trace) {
+    lines.push(`[SPARK_TRACE] ${trace.slice(0, 280)}${trace.length > 280 ? '...' : ''}`);
   }
 
   return lines.join('\n');

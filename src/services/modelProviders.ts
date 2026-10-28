@@ -19,7 +19,7 @@ export const RAW_WAREHOUSE_CROP_FALLBACK_URI =
   </g>
   <rect x="115" y="72" width="170" height="252" rx="8" fill="#00f0ff" fill-opacity="0.12" stroke="#22d3ee" stroke-width="2.5" stroke-dasharray="8 4"/>
   <rect x="115" y="72" width="115" height="22" fill="#083344"/>
-  <text x="172" y="87" fill="#67e8f9" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">SAM_MASK_RIGHT</text>
+  <text x="172" y="87" fill="#67e8f9" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">SAM_MASK</text>
 </svg>`);
 
 export interface SparkInferenceResult {
@@ -124,8 +124,7 @@ export function extractSparkReasoningAndJson(messageObj: any): {
 export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
-  frameBase64?: string | null,
-  rightCropBase64?: string | null
+  frameBase64?: string | null
 ): Promise<SparkInferenceResult> {
   const apiKey = process.env.BASETEN_API_KEY;
   const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
@@ -138,7 +137,7 @@ export async function callBasetenMuseSparkOpen(
   const contentParts: any[] = [
   {
     type: 'text',
-    text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the workspace image (and the zoomed-in RIGHT mask crop if provided) to extract exact colors, container geometry, and label text for the studio catalog prompt. Return ONLY the raw JSON object.`,
+    text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the attached workspace image: detect every visible object with normalized [x, y, w, h] boxes, bind the command to them, and extract exact colors, container geometry, material and label text for any studio catalog item. Return ONLY the raw JSON object.`,
   },
 ];
 
@@ -148,13 +147,6 @@ if (frameBase64) {
     image_url: {
       url: frameBase64.startsWith('data:') ? frameBase64 : `data:image/jpeg;base64,${frameBase64}`,
     },
-  });
-}
-
-if (rightCropBase64 && rightCropBase64.startsWith('data:image')) {
-  contentParts.push({
-    type: 'image_url',
-    image_url: { url: rightCropBase64 },
   });
 }
 

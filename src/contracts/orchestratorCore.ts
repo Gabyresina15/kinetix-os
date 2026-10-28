@@ -2,10 +2,10 @@ import vm from 'node:vm';
 import { z } from 'zod';
 
 export const VisualDnaSchema = z.object({
-  containerGeometry: z.string().default('modular ATX power supply unit chassis with fan grille'),
-  exactColorPalette: z.string().default('matte stealth black anodized metal'),
-  detectedBrandOrText: z.string().default('MODULAR 850W 80+ GOLD PSU'),
-  surfaceMaterial: z.string().default('powder-coated steel enclosure'),
+  containerGeometry: z.string().default('product with its exact observed physical shape'),
+  exactColorPalette: z.string().default('exact colors observed on the product'),
+  detectedBrandOrText: z.string().default('no legible text'),
+  surfaceMaterial: z.string().default('observed surface material'),
 });
 
 export type VisualDna = z.infer<typeof VisualDnaSchema>;
@@ -70,19 +70,21 @@ export const OrchestrationPlanSchema = z.object({
 
 export type OrchestrationPlan = z.infer<typeof OrchestrationPlanSchema>;
 
+export const FALLBACK_MASK_IDS = ['mask_fallback_1', 'mask_fallback_2', 'mask_fallback_3'] as const;
+
 export const GOLDEN_FALLBACK_PLAN: OrchestrationPlan = {
   summary: 'Fallback: no live detection available. Using generic spatial plan.',
   requiresHumanConfirmation: true,
   actions: [
     {
       tool: 'quarantine_and_claim',
-      targetMaskId: 'mask_left',
-      defectReason: 'Damaged item reported on left side',
+      targetMaskId: FALLBACK_MASK_IDS[0],
+      defectReason: 'Damaged item reported by operator',
       claimAmountUsd: 120.0,
     },
     {
       tool: 'mutate_inventory',
-      targetMaskId: 'mask_center',
+      targetMaskId: FALLBACK_MASK_IDS[1],
       sku: 'SKU-GENERIC-01',
       itemName: 'Detected Component',
       delta: 1,
@@ -90,13 +92,13 @@ export const GOLDEN_FALLBACK_PLAN: OrchestrationPlan = {
     },
     {
       tool: 'generate_studio_catalog',
-      targetMaskId: 'mask_right',
+      targetMaskId: FALLBACK_MASK_IDS[2],
       productTitle: 'Studio Catalog Item',
       visualDna: {
-        containerGeometry: 'rectangular hardware component',
-        exactColorPalette: 'dark metallic finish',
-        detectedBrandOrText: 'GENERIC COMPONENT',
-        surfaceMaterial: 'metal and plastic',
+        containerGeometry: 'rectangular product body',
+        exactColorPalette: 'neutral dark finish',
+        detectedBrandOrText: 'no legible text',
+        surfaceMaterial: 'mixed materials',
       },
     },
     {

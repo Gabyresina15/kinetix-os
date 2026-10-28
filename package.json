@@ -9,13 +9,21 @@
     "build": "tsc",
     "test:stream": "curl -N -X POST http://localhost:4000/api/orchestrate-stream"
   },
-  "keywords": ["kinetix", "spatial", "agents", "meta", "hackathon"],
+  "keywords": [
+    "kinetix",
+    "spatial",
+    "agents",
+    "meta",
+    "hackathon"
+  ],
   "author": "Kinetix Labs",
   "license": "MIT",
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.1.0",
+    "mongodb": "^7.7.0",
+    "sharp": "^0.35.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {

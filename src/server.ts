@@ -7,6 +7,7 @@ import { normalizeSpatialScene, RawSamMask } from './services/spatialNormalizer'
 import { buildMuseSparkSystemPrompt } from './prompts/sparkSystemPrompt';
 import {
   GOLDEN_FALLBACK_PLAN,
+  FALLBACK_MASK_IDS,
   executeMuseCodeMarginCalc,
   OrchestrationPlan,
   compileMuseImagePromptFromDna,
@@ -25,7 +26,7 @@ import {
   sanitizeReasoningToTelemetry,
 } from './services/spatialCropperAndDb';
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
 app.register(cors, { origin: '*' });
 
 const INITIAL_INVENTORY = () => [
@@ -53,29 +54,17 @@ export const LIVE_STORE_STATE = {
   catalogDrafts: [] as any[],
 };
 
-const BASE_SAM_MASKS: RawSamMask[] = [
-  {
-    id: 'mask_air_cooler',
-    label: 'Tower CPU Air Cooler',
-    bbox: [0.410, 0.495, 0.135, 0.285],
-    confidence: 0.98,
-    cropBase64: '',
-  },
-  {
-    id: 'mask_ram_sticks',
-    label: '2x Black DDR5 RAM Modules',
-    bbox: [0.172, 0.705, 0.168, 0.165],
-    confidence: 0.98,
-    cropBase64: '',
-  },
-  {
-    id: 'mask_psu_modular',
-    label: 'Modular ATX Power Supply',
-    bbox: [0.780, 0.575, 0.185, 0.270],
-    confidence: 0.99,
-    cropBase64: '',
-  },
-];
+const FALLBACK_SAM_MASKS: RawSamMask[] = [
+  { bbox: [0.08, 0.25, 0.26, 0.5] },
+  { bbox: [0.37, 0.25, 0.26, 0.5] },
+  { bbox: [0.66, 0.25, 0.26, 0.5] },
+].map((m, i) => ({
+  id: FALLBACK_MASK_IDS[i],
+  label: `Backup region ${i + 1}`,
+  bbox: m.bbox as [number, number, number, number],
+  confidence: 0.5,
+  cropBase64: '',
+}));
 
 app.post('/api/orchestrate-stream', async (request, reply) => {
   const body = (request.body as { frameBase64?: string | null; voiceTranscript?: string }) || {};
@@ -96,7 +85,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
   try {
     const mode = process.env.ORCHESTRATOR_MODE || 'LIVE';
-    const fallbackNormalized = normalizeSpatialScene(BASE_SAM_MASKS);
+    const fallbackNormalized = normalizeSpatialScene(FALLBACK_SAM_MASKS);
     const systemPrompt = buildMuseSparkSystemPrompt(fallbackNormalized, LIVE_STORE_STATE.inventory);
 
     let activePlan: OrchestrationPlan = GOLDEN_FALLBACK_PLAN;
@@ -132,34 +121,29 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    // Clean inventory: only keep items that will be mutated in this run
+    let dynamicRawMasks: RawSamMask[] = FALLBACK_SAM_MASKS;
     if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {
-      const mutatedSkus = new Set(
-        activePlan.actions
-          .filter((a) => a.tool === 'mutate_inventory')
-          .map((a: any) => a.sku)
-      );
-      LIVE_STORE_STATE.inventory = LIVE_STORE_STATE.inventory.filter((item) =>
-        mutatedSkus.has(item.sku)
-      );
-    }
-
-    // Prefer detected objects. If image is present but model returned nothing, do NOT fall back to hardware masks.
-    let dynamicRawMasks: RawSamMask[] = BASE_SAM_MASKS;
-    if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {
-      dynamicRawMasks = activePlan.detectedObjects.map((obj: any) => ({
-        id: obj.id || `mask_${Math.random().toString(36).slice(2, 7)}`,
+      dynamicRawMasks = activePlan.detectedObjects.map((obj, idx) => ({
+        id: obj.id || `mask_object_${idx + 1}`,
         label: obj.label || 'Detected Object',
-        bbox: Array.isArray(obj.bbox) && obj.bbox.length === 4 ? obj.bbox : [0.3, 0.3, 0.4, 0.4],
-        confidence: typeof obj.confidence === 'number' ? obj.confidence : 0.9,
+        bbox: obj.bbox,
+        confidence: obj.confidence,
         cropBase64: '',
-        isSensitivePII: !!obj.isSensitivePII,
+        isSensitivePII: obj.isSensitivePII,
       }));
-    } else if (body.frameBase64) {
-      dynamicRawMasks = [];
     }
 
-    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, dynamicRawMasks);
+    const targetMaskIds = new Set<string>(
+      activePlan.actions
+        .map((a) => ('targetMaskId' in a ? a.targetMaskId : undefined))
+        .filter((id): id is string => Boolean(id))
+    );
+
+    const masksWithRealCrops = await extractRealCropsFromFrame(
+      body.frameBase64,
+      dynamicRawMasks,
+      dynamicRawMasks === FALLBACK_SAM_MASKS ? undefined : targetMaskIds
+    );
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
     const piiObjects = normalizedObjects.filter((o) => o.isSensitivePII);
 
@@ -207,6 +191,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           label: targetObj?.label || 'Detected Item',
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
+          bbox: targetObj?.bbox,
+          cropBase64: targetObj?.cropBase64,
         });
 
         const claimRecord = {
@@ -280,6 +266,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           title: action.productTitle,
           visualDna: action.visualDna,
           compiledStudioPrompt,
+          bbox: targetObj?.bbox,
+          sourceCropBase64: targetObj?.cropBase64,
         });
 
         const catalogCard = {
