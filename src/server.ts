@@ -56,6 +56,8 @@ export const LIVE_STORE_STATE = {
   catalogDrafts: [] as any[],
 };
 
+const ZERO_TRUST_LIMIT_USD = 50;
+
 const FALLBACK_SAM_MASKS: RawSamMask[] = [
   { bbox: [0.08, 0.25, 0.26, 0.5] },
   { bbox: [0.37, 0.25, 0.26, 0.5] },
@@ -107,7 +109,7 @@ function findExistingInventoryItem<T extends { sku: string; name: string }>(
 function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
   return objects.map((obj, idx) => ({
     id: obj.id || `mask_object_${idx + 1}`,
-    label: obj.label || 'Detected Object',
+    label: (obj.label || 'Detected Object').slice(0, 22),
     bbox: clampBBox(obj.bbox),
     confidence: Number.isFinite(obj.confidence) ? obj.confidence : 0.8,
     cropBase64: '',
@@ -116,10 +118,16 @@ function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
 }
 
 app.post('/api/orchestrate-stream', async (request, reply) => {
-  const body = (request.body as { frameBase64?: string | null; voiceTranscript?: string }) || {};
+  const body = (request.body as { frameBase64?: string | null; voiceTranscript?: string; resetBeforeRun?: boolean }) || {};
   const voiceTranscript =
     body.voiceTranscript ||
     'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock las memorias RAM y armá foto de estudio para la fuente modular.';
+
+  if (body.resetBeforeRun !== false) {
+    LIVE_STORE_STATE.inventory = INITIAL_INVENTORY();
+    LIVE_STORE_STATE.claims = [];
+    LIVE_STORE_STATE.catalogDrafts = [];
+  }
 
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -134,6 +142,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   };
 
   const startedAt = Date.now();
+  sendEvent('VISION_SCAN_STARTED', {
+    model: 'meta-models/muse-spark-open-1026 (Baseten)',
+    status: 'SCANNING_2D_SCENE_AND_PLANNING_DAG',
+  });
 
   try {
     const mode = process.env.ORCHESTRATOR_MODE || 'LIVE';
@@ -147,23 +159,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     let spatialLocked = false;
     let lockedRawMasks: RawSamMask[] = FALLBACK_SAM_MASKS;
 
-    const emitSpatialLock = (objects: DetectedObjectDraft[], modelLabel: string) => {
+    const emitSpatialLock = (objects: DetectedObjectDraft[]) => {
       if (spatialLocked || !objects.length) return;
       spatialLocked = true;
       lockedRawMasks = draftsToRawMasks(objects);
-      const normalizedNow = normalizeSpatialScene(lockedRawMasks);
-      const piiNow = normalizedNow.filter((o) => o.isSensitivePII);
-      sendEvent('EDGE_PII_SHIELD', {
-        model: 'muse-spark-open-1026 (Baseten Edge Shield)',
-        latencyMs: Math.max(1, Date.now() - startedAt),
-        redactedMasks: piiNow.map((o) => ({ id: o.id, bbox: o.bbox, zone: o.spatialRegion2D })),
-        cloudTokensSavedPct: 68,
-      });
-      sendEvent('SPATIAL_LOCK', {
-        model: modelLabel,
-        latencyMs: Math.max(1, Date.now() - startedAt),
-        objects: normalizedNow,
-      });
     };
 
     if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
@@ -174,7 +173,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             systemPrompt,
             voiceTranscript,
             body.frameBase64,
-            (drafts) => emitSpatialLock(drafts, 'SAM 3.1 + Muse Spark Spatial Vision')
+            (drafts) => emitSpatialLock(drafts)
           ),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Baseten timeout > 45000ms')), 45000)
@@ -205,50 +204,60 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    if (!spatialLocked) {
-      const fromPlan = activePlan.detectedObjects?.length
-        ? activePlan.detectedObjects.map((obj, idx) => ({
-            id: obj.id || `mask_object_${idx + 1}`,
-            label: obj.label || 'Detected Object',
-            bbox: obj.bbox,
-            confidence: obj.confidence,
-            isSensitivePII: obj.isSensitivePII,
-          }))
-        : draftsToRawMasks(
-            FALLBACK_SAM_MASKS.map((m) => ({
-              id: m.id,
-              label: m.label,
-              bbox: m.bbox,
-              confidence: m.confidence,
-              isSensitivePII: false,
-            }))
-          ).map((m) => ({
-            id: m.id,
-            label: m.label,
-            bbox: m.bbox,
-            confidence: m.confidence,
-            isSensitivePII: Boolean(m.isSensitivePII),
-          }));
-      emitSpatialLock(fromPlan, 'SAM 3.1 + Muse Spark Spatial Vision');
+    const seenSkuIndex = new Map<string, number>();
+    const dedupedActions: OrchestrationPlan['actions'] = [];
+    for (const act of activePlan.actions) {
+      if (act.tool !== 'mutate_inventory') {
+        dedupedActions.push(act);
+        continue;
+      }
+      const matched =
+        LIVE_STORE_STATE.inventory.find((i) => i.sku === act.sku) ||
+        findExistingInventoryItem(LIVE_STORE_STATE.inventory, `${act.sku} ${act.itemName || ''}`);
+      const skuKey = matched?.sku || act.sku;
+      const prevIdx = seenSkuIndex.get(skuKey);
+      if (prevIdx === undefined) {
+        seenSkuIndex.set(skuKey, dedupedActions.length);
+        dedupedActions.push(matched ? { ...act, sku: matched.sku, itemName: matched.name } : act);
+        continue;
+      }
+      const prev = dedupedActions[prevIdx];
+      if (prev.tool === 'mutate_inventory' && act.delta > prev.delta) {
+        dedupedActions[prevIdx] = matched ? { ...act, sku: matched.sku, itemName: matched.name } : act;
+      }
     }
+    activePlan = { ...activePlan, actions: dedupedActions };
 
     let dynamicRawMasks: RawSamMask[] = lockedRawMasks;
     if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {
       dynamicRawMasks = draftsToRawMasks(activePlan.detectedObjects);
     }
 
-    const targetMaskIds = new Set<string>(
+    const referencedMaskIds = new Set(
       activePlan.actions
         .map((a) => ('targetMaskId' in a ? a.targetMaskId : undefined))
         .filter((id): id is string => Boolean(id))
     );
+    const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
+    const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
 
-    const masksWithRealCrops = await extractRealCropsFromFrame(
-      body.frameBase64,
-      dynamicRawMasks,
-      dynamicRawMasks === FALLBACK_SAM_MASKS ? undefined : targetMaskIds
-    );
+    const cropStartedAt = Date.now();
+    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, finalMasks);
+    const cropLatencyMs = Date.now() - cropStartedAt;
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
+    const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
+
+    sendEvent('EDGE_PII_SHIELD', {
+      model: 'muse-spark-open-1026',
+      latencyMs: Math.max(1, Date.now() - startedAt),
+      redactedMasks: piiMasks.map((o) => ({ id: o.id, bbox: o.bbox })),
+    });
+    sendEvent('SPATIAL_LOCK', {
+      model: 'Muse Spark Open Vision + Sharp Cropper',
+      latencyMs: cropLatencyMs,
+      sparkLatencyMs,
+      objects: normalizedObjects,
+    });
 
     const cleanTelemetryReasoning = sanitizeReasoningToTelemetry(
       rawReasoning,
@@ -273,12 +282,14 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       if (action.tool === 'quarantine_and_claim') {
         const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
         const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
+        const exceedsLimit = action.claimAmountUsd >= ZERO_TRUST_LIMIT_USD;
         const dbCommit = await persistErpMutation('supplier_claims', {
           ticketId,
           maskId: targetObj?.id || action.targetMaskId,
           label: targetObj?.label || 'Detected Item',
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
+          thresholdUsd: ZERO_TRUST_LIMIT_USD,
           bbox: targetObj?.bbox,
           cropBase64: targetObj?.cropBase64,
         });
@@ -290,8 +301,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           objectLabel: targetObj?.label || 'Detected Item',
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
+          thresholdUsd: ZERO_TRUST_LIMIT_USD,
           cropBase64: targetObj?.cropBase64,
-          guardrailStatus: 'HELD_WAITING_VOICE_AUTH' as const,
+          guardrailStatus: exceedsLimit
+            ? ('HELD_WAITING_VOICE_AUTH' as const)
+            : ('AUTHORIZED_AND_DISPATCHED' as const),
+          dispatchChannel: exceedsLimit ? undefined : 'AUTO_BELOW_THRESHOLD',
           timestamp: new Date().toISOString(),
         };
         LIVE_STORE_STATE.claims.unshift(claimRecord);
@@ -321,11 +336,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           };
           LIVE_STORE_STATE.inventory.unshift(item);
         }
+        const previousStock = item.stock;
         item.stock += action.delta;
 
         const dbCommit = await persistErpMutation('inventory_mutations', {
           sku: item.sku,
           targetMaskId: action.targetMaskId,
+          previousStock,
           delta: action.delta,
           newStock: item.stock,
         });
@@ -334,7 +351,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           tool: action.tool,
           targetMaskId: action.targetMaskId,
           status: 'STOCK_UPDATED',
-          result: { ...item, mongoId: dbCommit.mongoId },
+          result: { ...item, previousStock, delta: action.delta, mongoId: dbCommit.mongoId },
         });
       }
 
@@ -396,13 +413,22 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           } catch {}
         }
 
-        const baseRefCost = LIVE_STORE_STATE.inventory[0]?.baseCostUsd || 38.0;
-        const vmResult = executeMuseCodeMarginCalc(rawCode, baseRefCost, action.targetMarginPercent, action.taxRatePercent);
+        const priced =
+          LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-DDR5-32GB-KIT') ||
+          LIVE_STORE_STATE.inventory[0];
+        const baseRefCost = priced?.baseCostUsd || 95;
+        const vmResult = executeMuseCodeMarginCalc(
+          rawCode,
+          baseRefCost,
+          action.targetMarginPercent,
+          action.taxRatePercent
+        );
+        if (priced) priced.sellPriceUsd = vmResult.finalPrice;
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
           status: 'VM_EXECUTED',
           modelUsed: 'Muse Code (node:vm)',
-          result: vmResult,
+          result: { ...vmResult, updatedSku: priced?.sku || 'SKU-DDR5-32GB-KIT' },
         });
       }
     }
