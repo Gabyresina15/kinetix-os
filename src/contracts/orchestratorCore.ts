@@ -1,11 +1,31 @@
 import vm from 'node:vm';
 import { z } from 'zod';
 
+const flexibleText = (fallback: string) =>
+  z.preprocess((value) => {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((part) => (typeof part === 'string' ? part.trim() : ''))
+        .filter(Boolean)
+        .join(', ');
+      return joined || fallback;
+    }
+    if (value && typeof value === 'object') {
+      const joined = Object.values(value as Record<string, unknown>)
+        .map((part) => (typeof part === 'string' ? part.trim() : ''))
+        .filter(Boolean)
+        .join(', ');
+      return joined || fallback;
+    }
+    return fallback;
+  }, z.string());
+
 export const VisualDnaSchema = z.object({
-  containerGeometry: z.string().default('product with its exact observed physical shape'),
-  exactColorPalette: z.string().default('exact colors observed on the product'),
-  detectedBrandOrText: z.string().default('no legible text'),
-  surfaceMaterial: z.string().default('observed surface material'),
+  containerGeometry: flexibleText('product with its exact observed physical shape'),
+  exactColorPalette: flexibleText('exact colors observed on the product'),
+  detectedBrandOrText: flexibleText('no legible text'),
+  surfaceMaterial: flexibleText('observed surface material'),
 });
 
 export type VisualDna = z.infer<typeof VisualDnaSchema>;
@@ -137,7 +157,8 @@ export function salvageOrchestrationPlan(raw: unknown): OrchestrationPlan | null
           if (!action || typeof action !== 'object') return null;
           const copy = { ...(action as Record<string, unknown>) };
           if (copy.tool === 'generate_studio_catalog') {
-            copy.visualDna = VisualDnaSchema.parse(copy.visualDna ?? {});
+            const dna = VisualDnaSchema.safeParse(copy.visualDna ?? {});
+            copy.visualDna = dna.success ? dna.data : VisualDnaSchema.parse({});
           }
           const parsed = ActionSchema.safeParse(copy);
           return parsed.success ? parsed.data : null;
@@ -188,8 +209,12 @@ export function planFromLiveObjects(
       claimAmountUsd: 120,
     });
   }
+  const seenStock = new Set<string>();
   for (const item of stockTargets) {
     const isRam = /ram|memoria/.test(item.label.toLowerCase());
+    const bucket = isRam ? 'memory' : 'storage';
+    if (seenStock.has(bucket)) continue;
+    seenStock.add(bucket);
     actions.push({
       tool: 'mutate_inventory',
       targetMaskId: item.id,
