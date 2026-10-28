@@ -121,10 +121,109 @@ export function extractSparkReasoningAndJson(messageObj: any): {
   throw new Error(`No valid JSON object in output: ${searchPool.slice(0, 500)}`);
 }
 
+export interface DetectedObjectDraft {
+  id: string;
+  label: string;
+  bbox: [number, number, number, number];
+  confidence: number;
+  isSensitivePII?: boolean;
+}
+
+function tryExtractDetectedObjects(text: string): DetectedObjectDraft[] | null {
+  const key = text.indexOf('"detectedObjects"');
+  if (key === -1) return null;
+  const bracket = text.indexOf('[', key);
+  if (bracket === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = bracket; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const cleaned = text
+            .slice(bracket, i + 1)
+            .replace(/,\s*}/g, '}')
+            .replace(/,\s*]/g, ']');
+          const parsed = JSON.parse(cleaned);
+          if (!Array.isArray(parsed) || parsed.length === 0) return null;
+          const drafts: DetectedObjectDraft[] = [];
+          for (const item of parsed) {
+            if (!item || !Array.isArray(item.bbox) || item.bbox.length < 4) continue;
+            drafts.push({
+              id: String(item.id || ''),
+              label: String(item.label || 'Detected Object'),
+              bbox: item.bbox.slice(0, 4).map(Number) as [number, number, number, number],
+              confidence: Number(item.confidence ?? 0.8),
+              isSensitivePII: Boolean(item.isSensitivePII),
+            });
+          }
+          return drafts.length ? drafts : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function readChatStream(
+  response: Response,
+  onSnapshot: (content: string, reasoning: string) => void
+): Promise<{ content: string; reasoning: string }> {
+  const reader = response.body?.getReader();
+  if (!reader) return { content: '', reasoning: '' };
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let reasoning = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
+        if (typeof delta.content === 'string') content += delta.content;
+        const extra = delta.reasoning_content || delta.reasoning || '';
+        if (typeof extra === 'string') reasoning += extra;
+        onSnapshot(content, reasoning);
+      } catch {
+        // incomplete SSE chunk
+      }
+    }
+  }
+  return { content, reasoning };
+}
+
 export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
-  frameBase64?: string | null
+  frameBase64?: string | null,
+  onDetectedObjects?: (objects: DetectedObjectDraft[]) => void
 ): Promise<SparkInferenceResult> {
   const apiKey = process.env.BASETEN_API_KEY;
   const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
@@ -135,22 +234,22 @@ export async function callBasetenMuseSparkOpen(
   const start = Date.now();
 
   const contentParts: any[] = [
-  {
-    type: 'text',
-    text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the attached workspace image: detect every visible object with normalized [x, y, w, h] boxes, bind the command to them, and extract exact colors, container geometry, material and label text for any studio catalog item. Return ONLY the raw JSON object.`,
-  },
-];
-
-if (frameBase64) {
-  contentParts.push({
-    type: 'image_url',
-    image_url: {
-      url: frameBase64.startsWith('data:') ? frameBase64 : `data:image/jpeg;base64,${frameBase64}`,
+    {
+      type: 'text',
+      text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the attached workspace image: detect every visible object with normalized [x, y, w, h] boxes, bind the command to them, and extract exact colors, container geometry, material and label text for any studio catalog item. Return ONLY the raw JSON object. Put detectedObjects first.`,
     },
-  });
-}
+  ];
 
-const userContent = contentParts.length > 1 ? contentParts : contentParts[0].text;
+  if (frameBase64) {
+    contentParts.push({
+      type: 'image_url',
+      image_url: {
+        url: frameBase64.startsWith('data:') ? frameBase64 : `data:image/jpeg;base64,${frameBase64}`,
+      },
+    });
+  }
+
+  const userContent = contentParts.length > 1 ? contentParts : contentParts[0].text;
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -162,6 +261,7 @@ const userContent = contentParts.length > 1 ? contentParts : contentParts[0].tex
       model,
       temperature: 0.1,
       max_tokens: 8000,
+      stream: true,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
@@ -174,15 +274,44 @@ const userContent = contentParts.length > 1 ? contentParts : contentParts[0].tex
     throw new Error(`Baseten HTTP ${response.status}: ${errText}`);
   }
 
-  const data = (await response.json()) as any;
-  const message = data.choices?.[0]?.message;
-  const { reasoning, parsedJson } = extractSparkReasoningAndJson(message);
+  let spatialNotified = false;
+  const notify = (content: string, reasoning: string) => {
+    if (spatialNotified || !onDetectedObjects) return;
+    const drafts = tryExtractDetectedObjects(content) || tryExtractDetectedObjects(reasoning);
+    if (!drafts) return;
+    spatialNotified = true;
+    console.log('[SPATIAL_LOCK EARLY]', drafts.length, 'objects in', Date.now() - start, 'ms');
+    onDetectedObjects(drafts);
+  };
+
+  const contentType = response.headers.get('content-type') || '';
+  let content = '';
+  let reasoning = '';
+
+  if (!contentType.includes('application/json')) {
+    const streamed = await readChatStream(response, notify);
+    content = streamed.content;
+    reasoning = streamed.reasoning;
+  } else {
+    const data = (await response.json()) as any;
+    const message = data.choices?.[0]?.message || {};
+    content = message.content || '';
+    reasoning = message.reasoning_content || message.reasoning || '';
+    notify(content, reasoning);
+  }
+
+  const { reasoning: parsedReasoning, parsedJson } = extractSparkReasoningAndJson({
+    content,
+    reasoning_content: reasoning,
+  });
+
+  if (!spatialNotified) notify(content, reasoning);
 
   const validatedPlan = OrchestrationPlanSchema.parse(parsedJson);
 
   return {
     plan: validatedPlan,
-    reasoningTrace: reasoning,
+    reasoningTrace: parsedReasoning,
     modelUsed: `${model} (Baseten 2M TPM)`,
     latencyMs: Date.now() - start,
   };
