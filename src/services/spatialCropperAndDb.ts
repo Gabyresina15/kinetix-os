@@ -115,8 +115,9 @@ export function sanitizeReasoningToTelemetry(
           `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)}${where} -> quarantine_and_claim: "${a.defectReason}".`
         );
         const amount = Number(a.claimAmountUsd);
+        const held = amount >= 50;
         lines.push(
-          `[GUARDRAIL_AUDIT] Claim $${amount.toFixed(2)} -> ${amount > 100 ? 'HELD (> $100, operator confirmation required)' : 'AUTO_APPROVED'}.`
+          `[GUARDRAIL_AUDIT] Claim -$${amount.toFixed(2)} USD -> ${held ? 'HELD_BY_ZERO_TRUST_GUARDRAIL (exceeds $50.00 USD auto-limit)' : 'AUTO_APPROVED (< $50.00 USD)'}.`
         );
         break;
       }
