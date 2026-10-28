@@ -71,46 +71,37 @@ export const OrchestrationPlanSchema = z.object({
 export type OrchestrationPlan = z.infer<typeof OrchestrationPlanSchema>;
 
 export const GOLDEN_FALLBACK_PLAN: OrchestrationPlan = {
-  summary:
-    'Resolved 10 spatial masks: quarantined damaged CPU Air Cooler, ingested RAM + NVMe into stock, synthesized 8K studio asset for Modular PSU, recalculated 32% margins.',
+  summary: 'Fallback: no live detection available. Using generic spatial plan.',
   requiresHumanConfirmation: true,
   actions: [
     {
       tool: 'quarantine_and_claim',
-      targetMaskId: 'mask_air_cooler',
-      defectReason: 'Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler',
-      claimAmountUsd: 165.0,
+      targetMaskId: 'mask_left',
+      defectReason: 'Damaged item reported on left side',
+      claimAmountUsd: 120.0,
     },
     {
       tool: 'mutate_inventory',
-      targetMaskId: 'mask_ram_sticks',
-      sku: 'SKU-DDR5-32GB-KIT',
-      itemName: 'Fury Beast DDR5 32GB (2x16GB) Black',
-      delta: 2,
-      unitCostUsd: 95.0,
-    },
-    {
-      tool: 'mutate_inventory',
-      targetMaskId: 'mask_nvme_ssd',
-      sku: 'SKU-NVME-2TB-GEN4',
-      itemName: 'M.2 NVMe PCIe 4.0 SSD 2TB',
+      targetMaskId: 'mask_center',
+      sku: 'SKU-GENERIC-01',
+      itemName: 'Detected Component',
       delta: 1,
-      unitCostUsd: 110.0,
+      unitCostUsd: 50.0,
     },
     {
       tool: 'generate_studio_catalog',
-      targetMaskId: 'mask_psu_modular',
-      productTitle: 'Kinetix 850W 80+ Gold Full-Modular ATX PSU',
+      targetMaskId: 'mask_right',
+      productTitle: 'Studio Catalog Item',
       visualDna: {
-        containerGeometry: 'rectangular ATX modular power supply unit with top fan grille',
-        exactColorPalette: 'matte obsidian black casing with subtle metallic dark grey grille',
-        detectedBrandOrText: 'FULL MODULAR ATX PSU // 12VHPWR READY',
-        surfaceMaterial: 'brushed powder-coated steel chassis',
+        containerGeometry: 'rectangular hardware component',
+        exactColorPalette: 'dark metallic finish',
+        detectedBrandOrText: 'GENERIC COMPONENT',
+        surfaceMaterial: 'metal and plastic',
       },
     },
     {
       tool: 'recalculate_margins_vm',
-      targetMarginPercent: 32,
+      targetMarginPercent: 30,
       taxRatePercent: 21,
     },
   ],

@@ -129,17 +129,20 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    const dynamicRawMasks: RawSamMask[] =
-      activePlan.detectedObjects && activePlan.detectedObjects.length > 0
-        ? activePlan.detectedObjects.map((obj) => ({
-            id: obj.id,
-            label: obj.label,
-            bbox: obj.bbox,
-            confidence: obj.confidence,
-            cropBase64: '',
-            isSensitivePII: obj.isSensitivePII,
-          }))
-        : BASE_SAM_MASKS;
+    // Prefer detected objects. If image is present but model returned nothing, do NOT fall back to hardware masks.
+    let dynamicRawMasks: RawSamMask[] = BASE_SAM_MASKS;
+    if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {
+      dynamicRawMasks = activePlan.detectedObjects.map((obj: any) => ({
+        id: obj.id || `mask_${Math.random().toString(36).slice(2, 7)}`,
+        label: obj.label || 'Detected Object',
+        bbox: Array.isArray(obj.bbox) && obj.bbox.length === 4 ? obj.bbox : [0.3, 0.3, 0.4, 0.4],
+        confidence: typeof obj.confidence === 'number' ? obj.confidence : 0.9,
+        cropBase64: '',
+        isSensitivePII: !!obj.isSensitivePII,
+      }));
+    } else if (body.frameBase64) {
+      dynamicRawMasks = [];
+    }
 
     const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, dynamicRawMasks);
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
@@ -185,8 +188,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
         const dbCommit = await persistErpMutation('supplier_claims', {
           ticketId,
-          maskId: targetObj.id,
-          label: targetObj.label,
+          maskId: targetObj?.id || action.targetMaskId,
+          label: targetObj?.label || 'Detected Item',
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
         });
@@ -194,18 +197,18 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const claimRecord = {
           id: ticketId,
           mongoId: dbCommit.mongoId,
-          maskId: targetObj.id,
-          objectLabel: targetObj.label,
+          maskId: targetObj?.id || action.targetMaskId,
+          objectLabel: targetObj?.label || 'Detected Item',
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
-          cropBase64: targetObj.cropBase64,
+          cropBase64: targetObj?.cropBase64,
           guardrailStatus: 'HELD_WAITING_VOICE_AUTH' as const,
           timestamp: new Date().toISOString(),
         };
         LIVE_STORE_STATE.claims.unshift(claimRecord);
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
-          targetMaskId: targetObj.id,
+          targetMaskId: targetObj?.id || action.targetMaskId,
           status: 'QUARANTINED',
           result: claimRecord,
         });
@@ -258,7 +261,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const catId = `CAT-${Date.now().toString().slice(-4)}`;
         const dbCommit = await persistErpMutation('catalog_items', {
           catId,
-          maskId: targetObj.id,
+          maskId: targetObj?.id || action.targetMaskId,
           title: action.productTitle,
           visualDna: action.visualDna,
           compiledStudioPrompt,
@@ -267,11 +270,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const catalogCard = {
           id: catId,
           mongoId: dbCommit.mongoId,
-          maskId: targetObj.id,
+          maskId: targetObj?.id || action.targetMaskId,
           title: action.productTitle,
           visualDna: action.visualDna,
           promptUsed: compiledStudioPrompt,
-          sourceCropUrl: targetObj.cropBase64 && targetObj.cropBase64.startsWith('data:image')
+          sourceCropUrl: targetObj?.cropBase64 && targetObj.cropBase64.startsWith('data:image')
             ? targetObj.cropBase64
             : RAW_WAREHOUSE_CROP_FALLBACK_URI,
           modelUsed: 'Muse Image',
@@ -282,7 +285,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
-          targetMaskId: targetObj.id,
+          targetMaskId: targetObj?.id || action.targetMaskId,
           status: 'STUDIO_RENDER_READY',
           result: catalogCard,
         });
