@@ -129,6 +129,18 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
+    // Clean inventory: only keep items that will be mutated in this run
+    if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {
+      const mutatedSkus = new Set(
+        activePlan.actions
+          .filter((a) => a.tool === 'mutate_inventory')
+          .map((a: any) => a.sku)
+      );
+      LIVE_STORE_STATE.inventory = LIVE_STORE_STATE.inventory.filter((item) =>
+        mutatedSkus.has(item.sku)
+      );
+    }
+
     // Prefer detected objects. If image is present but model returned nothing, do NOT fall back to hardware masks.
     let dynamicRawMasks: RawSamMask[] = BASE_SAM_MASKS;
     if (activePlan.detectedObjects && activePlan.detectedObjects.length > 0) {

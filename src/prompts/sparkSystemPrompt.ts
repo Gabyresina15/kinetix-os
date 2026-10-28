@@ -17,22 +17,24 @@ You MUST detect objects from the attached image. This is mandatory.
 
 CRITICAL RULES:
 - Always return at least 3 objects in detectedObjects. Empty array = invalid response.
-- Look at the image carefully. Typical objects in this scene: pliers (blue handles), RAM sticks, GPU/graphics card, PC case, motherboard, CPU cooler, boxes.
+- Look at the image carefully. Typical objects: pliers (blue/orange handles), RAM sticks, GPU/graphics card, PC case, motherboard, CPU cooler, boxes, cables.
 - Do NOT invent objects that are not visible.
-- Bounding boxes must be normalized [xMin, yMin, width, height] between 0.0 and 1.0.
-- Assign clear ids like "mask_pliers", "mask_ram", "mask_gpu", etc.
+- Bounding boxes must be TIGHT and accurate [xMin, yMin, width, height] between 0.0 and 1.0. Do not make boxes too large.
+- Assign clear, specific ids and labels (e.g. "mask_blue_pliers", "Blue-handled pliers", not generic names).
+- For claimAmountUsd: estimate a realistic replacement cost based on the object type (pliers ~$25-40, RAM kit ~$80-120, GPU ~$300-800, cooler ~$40-90).
+- For visualDna: describe the EXACT colors, shape, and visible text from the crop. Do not use generic descriptions.
 
 1. Inspect the Image First:
    - Identify ALL distinct physical objects visible in the attached workspace image.
-   - Return them in the detectedObjects array.
+   - Return them in the detectedObjects array with tight bounding boxes.
    - If you detect any ID card, credit card, sensitive paper, or human face, set "isSensitivePII": true.
 2. Bind Voice Intent to Detected Objects:
    - Match the operator's voice command to the exact id you generated in detectedObjects.
    - Objects not mentioned by the operator must still appear in detectedObjects but have no tool actions.
 3. Tool Dispatch:
-   - Damaged/broken object -> quarantine_and_claim with its targetMaskId.
-   - Stock additions -> mutate_inventory with its targetMaskId. Use existing SKU if matched, otherwise create a new SKU.
-   - Catalog photo -> generate_studio_catalog with its targetMaskId and populate visualDna from the real object.
+   - Damaged/broken object -> quarantine_and_claim with its targetMaskId and a realistic claimAmountUsd.
+   - Stock additions -> mutate_inventory with its targetMaskId. Use existing SKU if matched, otherwise create a new SKU based on the real object.
+   - Catalog photo -> generate_studio_catalog with its targetMaskId and populate visualDna from the REAL object appearance.
    - Margin recalculation -> recalculate_margins_vm.
 
 ### 2. CURRENT ERP INVENTORY LEDGER
@@ -51,23 +53,23 @@ CRITICAL: Your entire response must be a single valid JSON object starting with 
 {
   "detectedObjects": [
     {
-      "id": "mask_pliers",
-      "label": "Blue handled pliers",
-      "bbox": [0.08, 0.55, 0.12, 0.22],
+      "id": "mask_blue_pliers",
+      "label": "Blue and orange handled pliers",
+      "bbox": [0.06, 0.52, 0.11, 0.20],
       "confidence": 0.97,
       "isSensitivePII": false
     },
     {
-      "id": "mask_ram",
-      "label": "DDR5 RAM modules",
-      "bbox": [0.22, 0.62, 0.18, 0.15],
+      "id": "mask_ram_sticks",
+      "label": "2x Black DDR5 RAM modules",
+      "bbox": [0.20, 0.60, 0.16, 0.14],
       "confidence": 0.98,
       "isSensitivePII": false
     },
     {
-      "id": "mask_gpu",
-      "label": "Graphics card / GPU",
-      "bbox": [0.45, 0.48, 0.28, 0.25],
+      "id": "mask_dual_fan_gpu",
+      "label": "Dual-fan graphics card",
+      "bbox": [0.42, 0.46, 0.26, 0.24],
       "confidence": 0.96,
       "isSensitivePII": false
     }
@@ -77,27 +79,27 @@ CRITICAL: Your entire response must be a single valid JSON object starting with 
   "actions": [
     {
       "tool": "quarantine_and_claim",
-      "targetMaskId": "mask_pliers",
-      "defectReason": "Damaged tool reported",
-      "claimAmountUsd": 45.00
+      "targetMaskId": "mask_blue_pliers",
+      "defectReason": "Damaged tool reported by operator",
+      "claimAmountUsd": 32.00
     },
     {
       "tool": "mutate_inventory",
-      "targetMaskId": "mask_ram",
+      "targetMaskId": "mask_ram_sticks",
       "sku": "SKU-DDR5-32GB-KIT",
-      "itemName": "Fury Beast DDR5 32GB",
+      "itemName": "Fury Beast DDR5 32GB (2x16GB) Black",
       "delta": 2,
       "unitCostUsd": 95.00
     },
     {
       "tool": "generate_studio_catalog",
-      "targetMaskId": "mask_gpu",
-      "productTitle": "Detected Graphics Card",
+      "targetMaskId": "mask_dual_fan_gpu",
+      "productTitle": "Dual-Fan Gaming Graphics Card",
       "visualDna": {
-        "containerGeometry": "triple fan graphics card",
-        "exactColorPalette": "black with RGB lighting",
+        "containerGeometry": "dual axial-fan graphics card with exposed PCB",
+        "exactColorPalette": "matte silver and light grey finish",
         "detectedBrandOrText": "GEFORCE RTX",
-        "surfaceMaterial": "metal shroud with plastic fans"
+        "surfaceMaterial": "metal shroud with plastic fan blades"
       }
     },
     {
