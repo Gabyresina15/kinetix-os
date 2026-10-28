@@ -489,6 +489,7 @@ export async function refineMasksWithSam31<T extends SamMask>(
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
+            Accept: 'application/json',
           },
           body: JSON.stringify({
             model,
@@ -510,9 +511,14 @@ export async function refineMasksWithSam31<T extends SamMask>(
           console.warn(`[SAM 3.1] ${mask.label} HTTP ${response.status}: ${errText.slice(0, 180)}`);
           return mask;
         }
-        const box = parseSamBox(extractOutputText(await response.json()));
+        const data = await response.json();
+        const raw = JSON.stringify(data);
+        const box = parseSamBox(raw);
         if (!box) {
-          console.warn(`[SAM 3.1] ${mask.label} returned no box`);
+          const output = Array.isArray((data as { output?: unknown[] }).output)
+            ? (data as { output: Array<{ type?: string }> }).output.map((item) => item?.type || 'item').join(',')
+            : Object.keys((data as object) || {}).join(',');
+          console.warn(`[SAM 3.1] ${mask.label} no box. shape=${output} body=${raw.slice(0, 500)}`);
           return mask;
         }
         return { ...mask, bbox: box };
