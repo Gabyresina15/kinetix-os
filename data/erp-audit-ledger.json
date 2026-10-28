@@ -1,0 +1,365 @@
+[
+  {
+    "collection": "catalog_items",
+    "_id": "fe0ecd0c3b4e9e9594578657",
+    "catId": "CAT-4044",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:06:44.044Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "7245052f18d27f8041b9d226",
+    "catId": "CAT-3623",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:06:33.623Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "3756b4baafecbc18bc8458ae",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 10,
+    "committedAt": "2026-10-28T17:06:31.643Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "585db9e4fe814bd254f16f5a",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 18,
+    "committedAt": "2026-10-28T17:06:31.347Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "0b993e6f6298f10afd083354",
+    "ticketId": "CLM-136",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:06:31.063Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "e2ee387a0a111e9fdfea5afb",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 9,
+    "committedAt": "2026-10-28T17:06:12.516Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "1f20d9ba0ab4f1baf000ed87",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 16,
+    "committedAt": "2026-10-28T17:06:12.225Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "6f503afe05be1507a322ebc6",
+    "ticketId": "CLM-692",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:06:11.930Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "3bb53ed3baf762959b44b4de",
+    "catId": "CAT-0502",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:05:50.502Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "7d8c7fd9cd76f05a2eee4322",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 9,
+    "committedAt": "2026-10-28T17:05:37.070Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "079e409209b0c4e3dc376a32",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 16,
+    "committedAt": "2026-10-28T17:05:36.773Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "d6fab6cda749f1d42fa23095",
+    "ticketId": "CLM-919",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:05:36.479Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "25c3b08ebe262d0ab0063ca4",
+    "catId": "CAT-7802",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:04:57.802Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "8916052613c504946e472bb7",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 11,
+    "committedAt": "2026-10-28T17:04:48.309Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "27180144aa00be76851c4d5e",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 20,
+    "committedAt": "2026-10-28T17:04:48.013Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "0dd7b74af31090d28f0fe41e",
+    "ticketId": "CLM-547",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:04:47.730Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "b0508c18fbfe2c6cd12cf727",
+    "catId": "CAT-7924",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:01:37.924Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "3186d2c729915faa4303e6b0",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 10,
+    "committedAt": "2026-10-28T17:01:18.419Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "312f62661a7541eb3ed54925",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 18,
+    "committedAt": "2026-10-28T17:01:18.123Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "191d0d9cefc916c3bdb4c417",
+    "ticketId": "CLM-196",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:01:17.841Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "7d71c61da30b9f4801cbc5af",
+    "catId": "CAT-3053",
+    "maskId": "mask_psu_modular",
+    "title": "Kinetix 850W 80+ Gold Full-Modular ATX PSU",
+    "visualDna": {
+      "containerGeometry": "rectangular ATX modular power supply unit with top fan grille",
+      "exactColorPalette": "matte obsidian black casing with subtle metallic dark grey grille",
+      "detectedBrandOrText": "FULL MODULAR ATX PSU // 12VHPWR READY",
+      "surfaceMaterial": "brushed powder-coated steel chassis"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a rectangular ATX modular power supply unit with top fan grille. Exact color palette: matte obsidian black casing with subtle metallic dark grey grille. Surface & material: brushed powder-coated steel chassis. Visible markings/details: \"FULL MODULAR ATX PSU // 12VHPWR READY\". Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.",
+    "committedAt": "2026-10-28T17:01:03.053Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "91030095c5625456fd11dc20",
+    "sku": "SKU-NVME-2TB-GEN4",
+    "targetMaskId": "mask_nvme_ssd",
+    "delta": 1,
+    "newStock": 9,
+    "committedAt": "2026-10-28T17:00:52.185Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "18843fe6c5ca862afade5503",
+    "sku": "SKU-DDR5-32GB-KIT",
+    "targetMaskId": "mask_ram_sticks",
+    "delta": 2,
+    "newStock": 16,
+    "committedAt": "2026-10-28T17:00:51.889Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "dd8ddfa846d5ac8ce99f02de",
+    "ticketId": "CLM-678",
+    "maskId": "mask_air_cooler",
+    "label": "Tower CPU Air Cooler (Copper Heatpipes)",
+    "reason": "Bent upper aluminum cooling fin & copper heatpipe dent on Tower CPU Cooler",
+    "amountUsd": 165,
+    "committedAt": "2026-10-28T17:00:51.594Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "28bd4f6dcedaf6d07af656dc",
+    "catId": "CAT-7352",
+    "title": "Titan Pro Shaker 700ml",
+    "visualDna": {
+      "containerGeometry": "Tall cylindrical shaker bottle with slightly tapered base, wide-mouth screw cap with flip-top spout and integrated carry loop",
+      "exactColorPalette": "Matte black body, electric blue lid and base ring, white label with neon green and orange accent text",
+      "detectedBrandOrText": "Titan Pro Shaker 700ml",
+      "surfaceMaterial": "Matte HDPE plastic body with glossy polypropylene lid and vinyl label wrap"
+    },
+    "compiledStudioPrompt": "Commercial 8k studio product photography of a Tall cylindrical shaker bottle with slightly tapered base, wide-mouth screw cap with flip-top spout and integrated carry loop. Exact color palette: Matte black body, electric blue lid and base ring, white label with neon green and orange accent text. Surface & packaging material: Matte HDPE plastic body with glossy polypropylene lid and vinyl label wrap. Visible label branding/typography: \"Titan Pro Shaker 700ml\". Placed centered on a dark slate podium, dramatic cyan and warm amber rim lighting, crisp studio reflections, ultra-detailed e-commerce hero shot.",
+    "committedAt": "2026-10-28T16:22:47.353Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "dd8293bc309d08aedf73b99a",
+    "sku": "SKU-WHEY-2LB",
+    "delta": 12,
+    "newStock": 30,
+    "committedAt": "2026-10-28T16:22:35.049Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "276970132cd90559713107c4",
+    "ticketId": "CLM-766",
+    "maskId": "mask_left_01",
+    "reason": "Structural dent and crush deformation verified on LEFT container sidewall, seal integrity compromised",
+    "amountUsd": 125,
+    "committedAt": "2026-10-28T16:22:34.723Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "4477595c8887c6a204da3988",
+    "catId": "CAT-2102",
+    "title": "Titan Pro Shaker 700ml",
+    "committedAt": "2026-10-28T00:10:32.102Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "88617ee0619e005a07382d13",
+    "sku": "SKU-WHEY-2LB",
+    "delta": 12,
+    "newStock": 30,
+    "committedAt": "2026-10-28T00:10:22.673Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "d1408fd74c0432c43300e688",
+    "ticketId": "CLM-375",
+    "maskId": "mask_left_01",
+    "reason": "Structural dent verified on LEFT container",
+    "amountUsd": 145,
+    "committedAt": "2026-10-28T00:10:22.361Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "609a5f24337d8e1b9502af10",
+    "catId": "CAT-5333",
+    "title": "Titan Pro Shaker 700ml",
+    "prompt": "Commercial 8k studio product photography of matte black Titan Pro Shaker 700ml cylindrical sports bottle with transparent screw lid and cyan branding, dramatic cyan and warm rim lighting, dark slate podium",
+    "committedAt": "2026-10-27T23:23:45.333Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "d00a5efefd074d9494078370",
+    "sku": "SKU-WHEY-2LB",
+    "delta": 12,
+    "newStock": 30,
+    "committedAt": "2026-10-27T23:23:36.790Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "3252e509750572ceb05d99c8",
+    "ticketId": "CLM-192",
+    "maskId": "mask_left_01",
+    "reason": "Structural dent and crack verified on LEFT container - crushed sidewall with broken seal",
+    "amountUsd": 125,
+    "committedAt": "2026-10-27T23:23:36.464Z"
+  },
+  {
+    "collection": "catalog_items",
+    "_id": "f2fa5218a3d7b3d1bd719f6f",
+    "catId": "CAT-4194",
+    "title": "Titan Pro Shaker 700ml",
+    "prompt": "Commercial 8k studio product photography of matte black Titan Pro Shaker 700ml cylindrical shaker bottle with transparent screw lid and logo, dramatic cyan and warm rim lighting, dark slate podium",
+    "committedAt": "2026-10-27T23:20:54.194Z"
+  },
+  {
+    "collection": "inventory_mutations",
+    "_id": "b14ec8d058359114e888e8a0",
+    "sku": "SKU-WHEY-2LB",
+    "delta": 12,
+    "newStock": 30,
+    "committedAt": "2026-10-27T23:20:43.925Z"
+  },
+  {
+    "collection": "supplier_claims",
+    "_id": "db0c1df22810cccce0bb9ecc",
+    "ticketId": "CLM-199",
+    "maskId": "mask_left_01",
+    "reason": "Structural dent and crack verified on LEFT container - damaged packaging",
+    "amountUsd": 125,
+    "committedAt": "2026-10-27T23:20:43.598Z"
+  }
+]

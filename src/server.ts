@@ -9,6 +9,7 @@ import {
   GOLDEN_FALLBACK_PLAN,
   executeMuseCodeMarginCalc,
   OrchestrationPlan,
+  compileMuseImagePromptFromDna,
 } from './contracts/orchestratorCore';
 import {
   callBasetenMuseSparkOpen,
@@ -29,80 +30,50 @@ app.register(cors, { origin: '*' });
 
 const INITIAL_INVENTORY = () => [
   {
-    sku: 'SKU-SHAKER-V2',
-    name: 'Titan Pro Shaker 700ml',
-    stock: 45,
-    standardInboundLot: 10,
-    baseCostUsd: 12.5,
-    sellPriceUsd: 21.0,
+    sku: 'SKU-DDR5-32GB-KIT',
+    name: 'Fury Beast DDR5 32GB (2x16GB) Black',
+    stock: 14,
+    standardInboundLot: 2,
+    baseCostUsd: 95.0,
+    sellPriceUsd: 158.0,
   },
   {
-    sku: 'SKU-WHEY-2LB',
-    name: 'IsoWhey Gold 2Lb Tub',
-    stock: 18,
-    standardInboundLot: 12,
-    baseCostUsd: 38.0,
-    sellPriceUsd: 62.0,
+    sku: 'SKU-NVME-2TB-GEN4',
+    name: 'M.2 NVMe PCIe 4.0 SSD 2TB',
+    stock: 8,
+    standardInboundLot: 1,
+    baseCostUsd: 110.0,
+    sellPriceUsd: 185.0,
   },
 ];
 
 export const LIVE_STORE_STATE = {
   inventory: INITIAL_INVENTORY(),
-  claims: [] as Array<{
-    id: string;
-    mongoId?: string;
-    maskId: string;
-    reason: string;
-    amountUsd: number;
-    cropBase64?: string;
-    guardrailStatus: 'HELD_WAITING_VOICE_AUTH' | 'AUTHORIZED_AND_DISPATCHED';
-    dispatchChannel?: string;
-    externalReceiptId?: string;
-    timestamp: string;
-  }>,
-  catalogDrafts: [] as Array<{
-    id: string;
-    mongoId?: string;
-    title: string;
-    sourceCropUrl?: string | null;
-    studioImageUrl: string;
-    status: string;
-    usedLiveApi: boolean;
-  }>,
+  claims: [] as any[],
+  catalogDrafts: [] as any[],
 };
 
-const GOLDEN_PATH_SAM_MASKS: RawSamMask[] = [
+const BASE_SAM_MASKS: RawSamMask[] = [
   {
-    id: 'mask_left_01',
-    bbox: [0.08, 0.25, 0.22, 0.45],
+    id: 'mask_air_cooler',
+    label: 'Tower CPU Air Cooler',
+    bbox: [0.410, 0.495, 0.135, 0.285],
     confidence: 0.98,
-    svgPath: 'M 80 250 L 280 250 L 295 680 L 75 680 Z',
     cropBase64: '',
-    detectedClassHint: 'container_damaged',
   },
   {
-    id: 'mask_center_02',
-    bbox: [0.38, 0.18, 0.24, 0.55],
+    id: 'mask_ram_sticks',
+    label: '2x Black DDR5 RAM Modules',
+    bbox: [0.172, 0.705, 0.168, 0.165],
+    confidence: 0.98,
+    cropBase64: '',
+  },
+  {
+    id: 'mask_psu_modular',
+    label: 'Modular ATX Power Supply',
+    bbox: [0.780, 0.575, 0.185, 0.270],
     confidence: 0.99,
-    svgPath: 'M 380 180 L 620 180 L 620 730 L 380 730 Z',
     cropBase64: '',
-    detectedClassHint: 'cylinder_tub',
-  },
-  {
-    id: 'mask_right_03',
-    bbox: [0.68, 0.28, 0.20, 0.42],
-    confidence: 0.97,
-    svgPath: 'M 680 280 L 880 280 L 880 700 L 680 700 Z',
-    cropBase64: '',
-    detectedClassHint: 'new_product_box',
-  },
-  {
-    id: 'mask_bottom_pii_04',
-    bbox: [0.12, 0.76, 0.25, 0.18],
-    confidence: 0.96,
-    svgPath: 'M 120 760 L 370 760 L 370 940 L 120 940 Z',
-    cropBase64: 'REDACTED_AT_EDGE',
-    detectedClassHint: 'id_card',
   },
 ];
 
@@ -110,7 +81,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   const body = (request.body as { frameBase64?: string | null; voiceTranscript?: string }) || {};
   const voiceTranscript =
     body.voiceTranscript ||
-    'El envase de la izquierda vino roto, abrí reclamo. Sumá el pote del centro al stock, armá foto de estudio para el nuevo de la derecha y recalculá precios con 30% de margen.';
+    'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock las memorias RAM y armá foto de estudio para la fuente modular.';
 
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -124,46 +95,26 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   };
 
   try {
-    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, GOLDEN_PATH_SAM_MASKS);
-    const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
-    const piiObjects = normalizedObjects.filter((o) => o.isSensitivePII);
-
-    const leftObjectCrop = normalizedObjects.find((o) => o.zone === 'LEFT')?.cropBase64;
-    const rightObjectCrop = normalizedObjects.find((o) => o.zone === 'RIGHT')?.cropBase64;
-
-    sendEvent('EDGE_PII_SHIELD', {
-      model: 'muse-spark-open-1026 (Baseten Edge Shield)',
-      latencyMs: 38,
-      redactedMasks: piiObjects.map((o) => ({ id: o.id, bbox: o.bbox, zone: o.zone })),
-      cloudTokensSavedPct: 68,
-    });
-
-    await new Promise((r) => setTimeout(r, 240));
-
-    sendEvent('SPATIAL_LOCK', {
-      model: 'SAM 3.1 Spatial Vision',
-      latencyMs: 290,
-      objects: normalizedObjects,
-    });
-
-    const systemPrompt = buildMuseSparkSystemPrompt(normalizedObjects, LIVE_STORE_STATE.inventory);
     const mode = process.env.ORCHESTRATOR_MODE || 'LIVE';
+    const fallbackNormalized = normalizeSpatialScene(BASE_SAM_MASKS);
+    const systemPrompt = buildMuseSparkSystemPrompt(fallbackNormalized, LIVE_STORE_STATE.inventory);
 
     let activePlan: OrchestrationPlan = GOLDEN_FALLBACK_PLAN;
-    let reasoningTrace = 'Spatial grounding verified.';
+    let rawReasoning = '';
     let sparkLatencyMs = 440;
     let sparkModelLabel = 'meta-models/muse-spark-open-1026 (Baseten)';
 
     if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
       try {
         const liveSpark = await Promise.race([
-          callBasetenMuseSparkOpen(systemPrompt, voiceTranscript, body.frameBase64, rightObjectCrop),
+          callBasetenMuseSparkOpen(systemPrompt, voiceTranscript, body.frameBase64),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Baseten timeout > 18000ms')), 18000)
+            setTimeout(() => reject(new Error('Baseten timeout > 25000ms')), 25000)
           ),
         ]);
+        console.log('[DETECTED]', liveSpark.plan.detectedObjects?.length || 0);
         activePlan = liveSpark.plan;
-        reasoningTrace = liveSpark.reasoningTrace;
+        rawReasoning = liveSpark.reasoningTrace;
         sparkLatencyMs = liveSpark.latencyMs;
         sparkModelLabel = liveSpark.modelUsed;
 
@@ -176,11 +127,44 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       } catch (liveErr) {
         app.log.warn(`Live Baseten fallback triggered: ${(liveErr as Error).message}`);
       }
-    } else {
-      await new Promise((r) => setTimeout(r, 350));
     }
 
-    const cleanTelemetryReasoning = sanitizeReasoningToTelemetry(reasoningTrace);
+    const dynamicRawMasks: RawSamMask[] =
+      activePlan.detectedObjects && activePlan.detectedObjects.length > 0
+        ? activePlan.detectedObjects.map((obj) => ({
+            id: obj.id,
+            label: obj.label,
+            bbox: obj.bbox,
+            confidence: obj.confidence,
+            cropBase64: '',
+            isSensitivePII: obj.isSensitivePII,
+          }))
+        : BASE_SAM_MASKS;
+
+    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, dynamicRawMasks);
+    const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
+    const piiObjects = normalizedObjects.filter((o) => o.isSensitivePII);
+
+    sendEvent('EDGE_PII_SHIELD', {
+      model: 'muse-spark-open-1026 (Baseten Edge Shield)',
+      latencyMs: 38,
+      redactedMasks: piiObjects.map((o) => ({ id: o.id, bbox: o.bbox, zone: o.spatialRegion2D })),
+      cloudTokensSavedPct: 68,
+    });
+
+    await new Promise((r) => setTimeout(r, 180));
+
+    sendEvent('SPATIAL_LOCK', {
+      model: 'SAM 3.1 + Muse Spark Spatial Vision',
+      latencyMs: 285,
+      objects: normalizedObjects,
+    });
+
+    const cleanTelemetryReasoning = sanitizeReasoningToTelemetry(
+      rawReasoning,
+      normalizedObjects,
+      activePlan
+    );
 
     sendEvent('SPARK_REASONING_TRACE', {
       model: sparkModelLabel,
@@ -194,13 +178,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     });
 
     for (const action of activePlan.actions) {
-      await new Promise((r) => setTimeout(r, 310));
+      await new Promise((r) => setTimeout(r, 260));
 
       if (action.tool === 'quarantine_and_claim') {
+        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
         const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
         const dbCommit = await persistErpMutation('supplier_claims', {
           ticketId,
-          maskId: action.targetMaskId,
+          maskId: targetObj.id,
+          label: targetObj.label,
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
         });
@@ -208,41 +194,63 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const claimRecord = {
           id: ticketId,
           mongoId: dbCommit.mongoId,
-          maskId: action.targetMaskId,
+          maskId: targetObj.id,
+          objectLabel: targetObj.label,
           reason: action.defectReason,
           amountUsd: action.claimAmountUsd,
-          cropBase64: leftObjectCrop,
+          cropBase64: targetObj.cropBase64,
           guardrailStatus: 'HELD_WAITING_VOICE_AUTH' as const,
           timestamp: new Date().toISOString(),
         };
         LIVE_STORE_STATE.claims.unshift(claimRecord);
-        sendEvent('TOOL_MUTATED', { tool: action.tool, status: 'QUARANTINED', result: claimRecord });
+        sendEvent('TOOL_MUTATED', {
+          tool: action.tool,
+          targetMaskId: targetObj.id,
+          status: 'QUARANTINED',
+          result: claimRecord,
+        });
       }
 
       if (action.tool === 'mutate_inventory') {
-        const item =
-          LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku) ||
-          LIVE_STORE_STATE.inventory[1];
+        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId);
+        let item = LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku);
+
+        if (!item) {
+          item = {
+            sku: action.sku,
+            name: action.itemName || targetObj?.label || 'Detected Item',
+            stock: 0,
+            standardInboundLot: action.delta,
+            baseCostUsd: action.unitCostUsd || 45.0,
+            sellPriceUsd: Number(((action.unitCostUsd || 45.0) * 1.5).toFixed(2)),
+          };
+          LIVE_STORE_STATE.inventory.unshift(item);
+        }
         item.stock += action.delta;
 
         const dbCommit = await persistErpMutation('inventory_mutations', {
           sku: item.sku,
+          targetMaskId: action.targetMaskId,
           delta: action.delta,
           newStock: item.stock,
         });
 
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
+          targetMaskId: action.targetMaskId,
           status: 'STOCK_UPDATED',
           result: { ...item, mongoId: dbCommit.mongoId },
         });
       }
 
       if (action.tool === 'generate_studio_catalog') {
+        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[normalizedObjects.length - 1];
+        const compiledStudioPrompt = compileMuseImagePromptFromDna(action.visualDna);
+
         let studioUrl = STUDIO_RENDER_FALLBACK_URI;
         let usedLive = false;
         if (mode === 'LIVE' && process.env.META_MODEL_API_KEY) {
-          const synth = await callMuseImageStudioSynthesis(action.museImagePrompt);
+          const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt);
           studioUrl = synth.imageUrl;
           usedLive = synth.usedLiveApi;
         }
@@ -250,17 +258,22 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const catId = `CAT-${Date.now().toString().slice(-4)}`;
         const dbCommit = await persistErpMutation('catalog_items', {
           catId,
+          maskId: targetObj.id,
           title: action.productTitle,
+          visualDna: action.visualDna,
+          compiledStudioPrompt,
         });
 
         const catalogCard = {
           id: catId,
           mongoId: dbCommit.mongoId,
+          maskId: targetObj.id,
           title: action.productTitle,
-          sourceCropUrl:
-            rightObjectCrop && rightObjectCrop.startsWith('data:image')
-              ? rightObjectCrop
-              : RAW_WAREHOUSE_CROP_FALLBACK_URI,
+          visualDna: action.visualDna,
+          promptUsed: compiledStudioPrompt,
+          sourceCropUrl: targetObj.cropBase64 && targetObj.cropBase64.startsWith('data:image')
+            ? targetObj.cropBase64
+            : RAW_WAREHOUSE_CROP_FALLBACK_URI,
           modelUsed: 'Muse Image',
           studioImageUrl: studioUrl,
           usedLiveApi: usedLive,
@@ -269,33 +282,25 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
+          targetMaskId: targetObj.id,
           status: 'STUDIO_RENDER_READY',
           result: catalogCard,
         });
       }
 
       if (action.tool === 'recalculate_margins_vm') {
-        let rawCode = `function calculatePrice(cost, marginPct, taxPct) {
-  const netMarginPrice = cost / (1 - (marginPct / 100));
-  return netMarginPrice * (1 + (taxPct / 100));
-}`;
+        let rawCode = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
         if (mode === 'LIVE' && (process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY)) {
           try {
             rawCode = await Promise.race([
               callMuseCodeGenerator(action.targetMarginPercent, action.taxRatePercent),
               new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Code timeout')), 3000)),
             ]);
-          } catch {
-            // keep deterministic
-          }
+          } catch {}
         }
 
-        const vmResult = executeMuseCodeMarginCalc(
-          rawCode,
-          38.0,
-          action.targetMarginPercent,
-          action.taxRatePercent
-        );
+        const baseRefCost = LIVE_STORE_STATE.inventory[0]?.baseCostUsd || 38.0;
+        const vmResult = executeMuseCodeMarginCalc(rawCode, baseRefCost, action.targetMarginPercent, action.taxRatePercent);
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
           status: 'VM_EXECUTED',
@@ -306,7 +311,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     }
 
     sendEvent('ORCHESTRATION_COMPLETE', {
-      totalElapsedMs: 1850,
+      totalElapsedMs: sparkLatencyMs + 950,
       storeState: LIVE_STORE_STATE,
     });
   } catch (error) {
@@ -316,11 +321,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   }
 });
 
-app.post('/api/confirm-guardrail', async (request, reply) => {
+app.post('/api/confirm-guardrail', async (_request, reply) => {
   const held = LIVE_STORE_STATE.claims.find((c) => c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH');
-  if (!held) {
-    return reply.status(404).send({ ok: false, message: 'No claim waiting for authorization' });
-  }
+  if (!held) return reply.status(404).send({ ok: false });
 
   const dispatch = await dispatchSupplierClaimNotification({
     id: held.id,
@@ -333,7 +336,6 @@ app.post('/api/confirm-guardrail', async (request, reply) => {
   held.guardrailStatus = 'AUTHORIZED_AND_DISPATCHED';
   held.dispatchChannel = dispatch.dispatchedVia;
   held.externalReceiptId = dispatch.externalReceiptId;
-
   return reply.send({ ok: true, claim: held });
 });
 

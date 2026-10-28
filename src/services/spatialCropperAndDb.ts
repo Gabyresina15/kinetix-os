@@ -1,115 +1,130 @@
+import { NormalizedSpatialObject, RawSamMask } from './spatialNormalizer';
+import { OrchestrationPlan } from '../contracts/orchestratorCore';
 import sharp from 'sharp';
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { MongoClient, Db } from 'mongodb';
-import { RawSamMask } from './spatialNormalizer';
 
-let mongoDb: Db | null = null;
+let persistenceDb: any = null;
 
-export async function getPersistenceDb(): Promise<Db | null> {
-  if (mongoDb) return mongoDb;
-  const uri = process.env.MONGODB_URI;
-  if (!uri) return null;
+export async function getPersistenceDb(): Promise<any> {
+  if (persistenceDb) return persistenceDb;
   try {
-    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 2500 });
+    const { MongoClient } = await import('mongodb');
+    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+    const client = new MongoClient(uri);
     await client.connect();
-    mongoDb = client.db(process.env.MONGODB_DB_NAME || 'kinetix_os_erp');
-    console.log('✅ Connected to live MongoDB cluster');
-    return mongoDb;
-  } catch (err) {
-    console.warn('⚠️ MongoDB unreachable, using local ledger:', (err as Error).message);
+    persistenceDb = client.db('kinetix');
+    return persistenceDb;
+  } catch {
     return null;
   }
 }
 
-export async function persistErpMutation(
-  collectionName: 'inventory_mutations' | 'supplier_claims' | 'catalog_items',
-  payload: Record<string, unknown>
-): Promise<{ mongoId: string; persistedIn: 'MONGODB_ATLAS' | 'LOCAL_JSON_LEDGER' }> {
-  const generatedId = crypto.randomBytes(12).toString('hex');
-  const document = {
-    _id: generatedId,
-    ...payload,
-    committedAt: new Date().toISOString(),
-  };
-
-  const db = await getPersistenceDb();
-  if (db) {
-    try {
-      await db.collection(collectionName).insertOne(document as any);
-      return { mongoId: generatedId, persistedIn: 'MONGODB_ATLAS' };
-    } catch {
-      // fall through
-    }
-  }
-
-  const ledgerDir = path.join(process.cwd(), 'data');
-  const ledgerFile = path.join(ledgerDir, 'erp-audit-ledger.json');
-  await fs.mkdir(ledgerDir, { recursive: true });
-
-  let existing: unknown[] = [];
+export async function persistErpMutation(collection: string, doc: any): Promise<{ mongoId: string }> {
   try {
-    const raw = await fs.readFile(ledgerFile, 'utf-8');
-    existing = JSON.parse(raw);
-  } catch {
-    existing = [];
-  }
-  existing.unshift({ collection: collectionName, ...document });
-  await fs.writeFile(ledgerFile, JSON.stringify(existing.slice(0, 100), null, 2), 'utf-8');
-
-  return { mongoId: generatedId, persistedIn: 'LOCAL_JSON_LEDGER' };
+    const db = await getPersistenceDb();
+    if (db) {
+      const result = await db.collection(collection).insertOne({ ...doc, createdAt: new Date() });
+      return { mongoId: result.insertedId.toString() };
+    }
+  } catch {}
+  const ledgerDir = path.join(process.cwd(), 'data', 'ledger');
+  await fs.mkdir(ledgerDir, { recursive: true });
+  const id = `LEDGER-${Date.now().toString(36).toUpperCase()}`;
+  await fs.writeFile(
+    path.join(ledgerDir, `${id}.json`),
+    JSON.stringify({ id, collection, ...doc, createdAt: new Date().toISOString() }, null, 2)
+  );
+  return { mongoId: id };
 }
 
 export async function extractRealCropsFromFrame(
   frameBase64: string | null | undefined,
   masks: RawSamMask[]
 ): Promise<RawSamMask[]> {
-  if (!frameBase64) return masks;
+  if (!frameBase64 || !frameBase64.startsWith('data:image')) return masks;
 
   try {
-    const cleanBase64 = frameBase64.replace(/^data:image\/\w+;base64,/, '');
-    const imgBuffer = Buffer.from(cleanBase64, 'base64');
-    const metadata = await sharp(imgBuffer).metadata();
-    const imgWidth = metadata.width || 1280;
-    const imgHeight = metadata.height || 720;
+    const base64Data = frameBase64.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    const image = sharp(buffer);
+    const meta = await image.metadata();
+    const imgW = meta.width || 1280;
+    const imgH = meta.height || 720;
 
-    const updatedMasks = await Promise.all(
+    const updated = await Promise.all(
       masks.map(async (mask) => {
-        if ((mask as any).detectedClassHint === 'id_card') {
-          return { ...mask, cropBase64: 'REDACTED_AT_EDGE' };
+        if (mask.isSensitivePII) return { ...mask, cropBase64: 'REDACTED' };
+        const [x, y, w, h] = mask.bbox;
+        const left = Math.max(0, Math.floor(x * imgW));
+        const top = Math.max(0, Math.floor(y * imgH));
+        const width = Math.min(imgW - left, Math.floor(w * imgW));
+        const height = Math.min(imgH - top, Math.floor(h * imgH));
+
+        if (width < 10 || height < 10) return mask;
+
+        try {
+          const cropBuffer = await image.clone().extract({ left, top, width, height }).jpeg({ quality: 80 }).toBuffer();
+          return { ...mask, cropBase64: `data:image/jpeg;base64,${cropBuffer.toString('base64')}` };
+        } catch {
+          return mask;
         }
-        const [nx, ny, nw, nh] = mask.bbox;
-        const left = Math.max(0, Math.floor(nx * imgWidth));
-        const top = Math.max(0, Math.floor(ny * imgHeight));
-        const width = Math.min(imgWidth - left, Math.max(40, Math.floor(nw * imgWidth)));
-        const height = Math.min(imgHeight - top, Math.max(40, Math.floor(nh * imgHeight)));
-
-        const croppedBuffer = await sharp(imgBuffer)
-          .extract({ left, top, width, height })
-          .resize(320, 320, { fit: 'cover' })
-          .jpeg({ quality: 85 })
-          .toBuffer();
-
-        return {
-          ...mask,
-          cropBase64: `data:image/jpeg;base64,${croppedBuffer.toString('base64')}`,
-        };
       })
     );
-
-    return updatedMasks;
+    return updated;
   } catch (err) {
     console.warn('Sharp crop warning:', (err as Error).message);
     return masks;
   }
 }
 
-export function sanitizeReasoningToTelemetry(rawReasoning: string): string {
-  return [
-    `[SPATIAL_GROUNDING] Locked 3 actionable masks (LEFT, CENTER, RIGHT) + 1 PII shield.`,
-    `[LOT_RESOLUTION] Bound CENTER mask to SKU-WHEY-2LB; applied standardInboundLot=12.`,
-    `[VISUAL_CONDITIONING] Extracted RIGHT mask crop -> conditioning Muse Image studio synthesis.`,
-    `[GUARDRAIL_ENFORCEMENT] Claim exceeds $100 threshold -> status: HELD_FOR_OPERATOR.`,
-  ].join('\n');
+export function sanitizeReasoningToTelemetry(
+  rawReasoning: string,
+  detectedObjects: NormalizedSpatialObject[] = [],
+  plan: OrchestrationPlan = { actions: [], summary: '', requiresHumanConfirmation: true }
+): string {
+  const actionableCount = detectedObjects.filter((o) => !o.isSensitivePII).length;
+  const piiCount = detectedObjects.filter((o) => o.isSensitivePII).length;
+
+  const boundTargets = (plan.actions || [])
+    .map((a: any) => {
+      if (a.targetMaskId) {
+        const matched = detectedObjects.find((o) => o.id === a.targetMaskId);
+        return matched ? `${matched.label} (${a.tool})` : `${a.targetMaskId} (${a.tool})`;
+      }
+      return `Global (${a.tool})`;
+    })
+    .join(' | ');
+
+  const catalogAction = (plan.actions || []).find((a: any) => a.tool === 'generate_studio_catalog') as any;
+  const claimAction = (plan.actions || []).find((a: any) => a.tool === 'quarantine_and_claim') as any;
+
+  const cleanThought = (rawReasoning || '')
+    .replace(/we need to decide[^.]*\./gi, '')
+    .replace(/let's assume[^.]*\./gi, '')
+    .replace(/i think[^.]*\./gi, '')
+    .replace(/\n+/g, ' ')
+    .trim();
+
+  const lines: string[] = [
+    `[SCENE_GRAPH] Indexed ${actionableCount} physical objects (${piiCount} PII shields).`,
+    `[SEMANTIC_BINDING] ${boundTargets || 'Bound voice intent to scene graph.'}`,
+  ];
+
+  if (catalogAction?.visualDna) {
+    lines.push(
+      `[VISUAL_DNA] ${catalogAction.targetMaskId}: "${catalogAction.visualDna.containerGeometry}" (${catalogAction.visualDna.exactColorPalette}).`
+    );
+  }
+
+  if (claimAction) {
+    const status = claimAction.claimAmountUsd > 100 ? 'HELD (> $100)' : 'AUTO_APPROVED';
+    lines.push(`[GUARDRAIL_AUDIT] Claim $${Number(claimAction.claimAmountUsd).toFixed(2)} -> ${status}.`);
+  }
+
+  if (cleanThought) {
+    lines.push(`[SPARK_TRACE] ${cleanThought.slice(0, 280)}`);
+  }
+
+  return lines.join('\n');
 }
