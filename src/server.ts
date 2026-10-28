@@ -86,6 +86,24 @@ function clampBBox(raw: number[]): [number, number, number, number] {
   ];
 }
 
+function categoryOf(text: string): string | null {
+  const hay = text.toLowerCase();
+  if (/ram|ddr|memoria|fury/.test(hay)) return 'memory';
+  if (/ssd|nvme|disco|m\.?2/.test(hay)) return 'storage';
+  if (/cooler|aio|ventilador|heatsink/.test(hay)) return 'cooler';
+  if (/fuente|psu|power/.test(hay)) return 'psu';
+  return null;
+}
+
+function findExistingInventoryItem<T extends { sku: string; name: string }>(
+  inventory: T[],
+  hint: string
+): T | undefined {
+  const wanted = categoryOf(hint);
+  if (!wanted) return undefined;
+  return inventory.find((item) => categoryOf(`${item.sku} ${item.name}`) === wanted);
+}
+
 function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
   return objects.map((obj, idx) => ({
     id: obj.id || `mask_object_${idx + 1}`,
@@ -287,7 +305,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
       if (action.tool === 'mutate_inventory') {
         const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId);
-        let item = LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku);
+        const hint = `${action.sku} ${action.itemName || ''} ${targetObj?.label || ''}`;
+        let item =
+          LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku) ||
+          findExistingInventoryItem(LIVE_STORE_STATE.inventory, hint);
 
         if (!item) {
           item = {
