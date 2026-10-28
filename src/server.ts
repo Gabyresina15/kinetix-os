@@ -20,6 +20,7 @@ import {
   dispatchSupplierClaimNotification,
   STUDIO_RENDER_FALLBACK_URI,
   RAW_WAREHOUSE_CROP_FALLBACK_URI,
+  refineMasksWithSam31,
   type DetectedObjectDraft,
 } from './services/modelProviders';
 import {
@@ -240,9 +241,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
+    const sam = await refineMasksWithSam31(body.frameBase64, finalMasks);
 
     const cropStartedAt = Date.now();
-    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, finalMasks);
+    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, sam.masks);
     const cropLatencyMs = Date.now() - cropStartedAt;
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
     const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
@@ -253,9 +255,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       redactedMasks: piiMasks.map((o) => ({ id: o.id, bbox: o.bbox })),
     });
     sendEvent('SPATIAL_LOCK', {
-      model: 'Muse Spark Open Vision + Sharp Cropper',
-      latencyMs: cropLatencyMs,
+      model: sam.used ? 'SAM 3.1' : 'Muse Spark Open Vision + Sharp Cropper',
+      latencyMs: sam.used ? sam.latencyMs : cropLatencyMs,
       sparkLatencyMs,
+      samUsed: sam.used,
+      samLatencyMs: sam.latencyMs,
+      samRefined: sam.refined,
       objects: normalizedObjects,
     });
 
