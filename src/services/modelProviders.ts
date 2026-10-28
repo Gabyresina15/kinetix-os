@@ -1,6 +1,27 @@
 import 'dotenv/config';
 import { OrchestrationPlan, OrchestrationPlanSchema } from '../contracts/orchestratorCore';
 
+export const RAW_WAREHOUSE_CROP_FALLBACK_URI =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
+  <rect width="400" height="400" fill="#18181b"/>
+  <rect y="270" width="400" height="130" fill="#27272a"/>
+  <line x1="0" y1="270" x2="400" y2="270" stroke="#3f3f46" stroke-width="3"/>
+  <ellipse cx="215" cy="325" rx="95" ry="18" fill="#09090b" opacity="0.75"/>
+  <g transform="rotate(-2 200 210)">
+    <rect x="130" y="110" width="140" height="200" rx="14" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+    <rect x="138" y="84" width="124" height="28" rx="4" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+    <rect x="132" y="155" width="136" height="105" fill="#0f172a"/>
+    <text x="200" y="185" fill="#94a3b8" font-family="monospace" font-size="11" font-weight="bold" text-anchor="middle">TITAN LABS</text>
+    <text x="200" y="212" fill="#cbd5e1" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">CREATINE</text>
+    <text x="200" y="232" fill="#64748b" font-family="monospace" font-size="9" text-anchor="middle">500G RAW LOT</text>
+  </g>
+  <rect x="115" y="72" width="170" height="252" rx="8" fill="#00f0ff" fill-opacity="0.12" stroke="#22d3ee" stroke-width="2.5" stroke-dasharray="8 4"/>
+  <rect x="115" y="72" width="115" height="22" fill="#083344"/>
+  <text x="172" y="87" fill="#67e8f9" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">SAM_MASK_RIGHT</text>
+</svg>`);
+
 export interface SparkInferenceResult {
   plan: OrchestrationPlan;
   reasoningTrace: string;
@@ -103,7 +124,8 @@ export function extractSparkReasoningAndJson(messageObj: any): {
 export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
-  frameBase64?: string | null
+  frameBase64?: string | null,
+  rightCropBase64?: string | null
 ): Promise<SparkInferenceResult> {
   const apiKey = process.env.BASETEN_API_KEY;
   const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
@@ -113,22 +135,30 @@ export async function callBasetenMuseSparkOpen(
 
   const start = Date.now();
 
-  const userContent: any = frameBase64
-    ? [
-        {
-          type: 'text',
-          text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\n\nAfter reasoning, you MUST end with a complete valid JSON object matching the schema. Do not stop mid-thought.`,
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: frameBase64.startsWith('data:')
-              ? frameBase64
-              : `data:image/jpeg;base64,${frameBase64}`,
-          },
-        },
-      ]
-    : `OPERATOR VOICE COMMAND: "${voiceTranscript}"\n\nAfter reasoning, you MUST end with a complete valid JSON object matching the schema. Do not stop mid-thought.`;
+  const contentParts: any[] = [
+  {
+    type: 'text',
+    text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the workspace image (and the zoomed-in RIGHT mask crop if provided) to extract exact colors, container geometry, and label text for the studio catalog prompt. Return ONLY the raw JSON object.`,
+  },
+];
+
+if (frameBase64) {
+  contentParts.push({
+    type: 'image_url',
+    image_url: {
+      url: frameBase64.startsWith('data:') ? frameBase64 : `data:image/jpeg;base64,${frameBase64}`,
+    },
+  });
+}
+
+if (rightCropBase64 && rightCropBase64.startsWith('data:image')) {
+  contentParts.push({
+    type: 'image_url',
+    image_url: { url: rightCropBase64 },
+  });
+}
+
+const userContent = contentParts.length > 1 ? contentParts : contentParts[0].text;
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -263,27 +293,67 @@ export async function callMuseCodeGenerator(
 
 export async function dispatchSupplierClaimNotification(claim: {
   id: string;
+  mongoId?: string;
   reason: string;
   amountUsd: number;
-}): Promise<{ dispatchedVia: string }> {
+  cropBase64?: string;
+}): Promise<{ dispatchedVia: string; externalReceiptId: string }> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
+  const caption =
+    `🚨 *KINETIX OS — ZERO-TRUST CLAIM DISPATCHED*\n` +
+    `• *Ticket:* \`#${claim.id}\`\n` +
+    `• *MongoDB Tx:* \`${claim.mongoId || 'local'}\`\n` +
+    `• *Debit Amount:* *-$${claim.amountUsd.toFixed(2)} USD*\n` +
+    `• *Spatial Defect:* ${claim.reason}`;
 
   if (botToken && chatId) {
     try {
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      if (claim.cropBase64 && claim.cropBase64.startsWith('data:image')) {
+        const cleanB64 = claim.cropBase64.replace(/^data:image\/\w+;base64,/, '');
+        const imgBlob = new Blob([Buffer.from(cleanB64, 'base64')], { type: 'image/jpeg' });
+        const form = new FormData();
+        form.append('chat_id', chatId);
+        form.append('photo', imgBlob, `defect-${claim.id}.jpg`);
+        form.append('caption', caption);
+        form.append('parse_mode', 'Markdown');
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+          method: 'POST',
+          body: form,
+        });
+        if (tgRes.ok) {
+          const tgJson = (await tgRes.json()) as any;
+          return {
+            dispatchedVia: 'TELEGRAM_LIVE_PHOTO_WEBHOOK',
+            externalReceiptId: `TG-MSG-${tgJson.result?.message_id || Date.now()}`,
+          };
+        }
+      }
+
+      const tgTextRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: `🚨 *KINETIX OS - SUPPLIER CLAIM APPROVED*\nTicket: #${claim.id}\nDebit: -$${claim.amountUsd.toFixed(2)} USD\nReason: ${claim.reason}`,
+          text: caption,
           parse_mode: 'Markdown',
         }),
       });
-      return { dispatchedVia: 'TELEGRAM_LIVE_WEBHOOK' };
-    } catch {
-      // Fallback silencioso
+      if (tgTextRes.ok) {
+        const tgJson = (await tgTextRes.json()) as any;
+        return {
+          dispatchedVia: 'TELEGRAM_LIVE_WEBHOOK',
+          externalReceiptId: `TG-MSG-${tgJson.result?.message_id || Date.now()}`,
+        };
+      }
+    } catch (err) {
+      console.warn('Telegram webhook fallback:', (err as Error).message);
     }
   }
-  return { dispatchedVia: 'KINETIX_ERP_LEDGER_WEBHOOK' };
+
+  return {
+    dispatchedVia: 'LOCAL_LEDGER',
+    externalReceiptId: `LEDGER-${Date.now().toString(36).toUpperCase()}`,
+  };
 }
