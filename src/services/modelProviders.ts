@@ -464,6 +464,17 @@ function readImageSize(dataUrl: string): { w: number; h: number } | null {
   return null;
 }
 
+function inflateBox(
+  box: [number, number, number, number],
+  pad: number
+): [number, number, number, number] {
+  const x = Math.max(0, box[0] - box[2] * pad);
+  const y = Math.max(0, box[1] - box[3] * pad);
+  const right = Math.min(1, box[0] + box[2] + box[2] * pad);
+  const bottom = Math.min(1, box[1] + box[3] + box[3] * pad);
+  return [x, y, Math.max(0.02, right - x), Math.max(0.02, bottom - y)];
+}
+
 function boxesAreSameObject(
   original: [number, number, number, number],
   refined: [number, number, number, number]
@@ -471,21 +482,22 @@ function boxesAreSameObject(
   const area = (box: [number, number, number, number]) => Math.max(0, box[2]) * Math.max(0, box[3]);
   const originalArea = area(original);
   const refinedArea = area(refined);
-  if (originalArea < 0.0004 || refinedArea < 0.0004) return false;
-  const x1 = Math.max(original[0], refined[0]);
-  const y1 = Math.max(original[1], refined[1]);
-  const x2 = Math.min(original[0] + original[2], refined[0] + refined[2]);
-  const y2 = Math.min(original[1] + original[3], refined[1] + refined[3]);
+  if (originalArea < 0.0002 || refinedArea < 0.0002) return false;
+  const search = inflateBox(original, 0.6);
+  const x1 = Math.max(search[0], refined[0]);
+  const y1 = Math.max(search[1], refined[1]);
+  const x2 = Math.min(search[0] + search[2], refined[0] + refined[2]);
+  const y2 = Math.min(search[1] + search[3], refined[1] + refined[3]);
   const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   const centerX = refined[0] + refined[2] / 2;
   const centerY = refined[1] + refined[3] / 2;
   const centerInside =
-    centerX >= original[0] - original[2] * 0.15 &&
-    centerX <= original[0] + original[2] * 1.15 &&
-    centerY >= original[1] - original[3] * 0.15 &&
-    centerY <= original[1] + original[3] * 1.15;
+    centerX >= search[0] &&
+    centerX <= search[0] + search[2] &&
+    centerY >= search[1] &&
+    centerY <= search[1] + search[3];
   const areaRatio = refinedArea / originalArea;
-  return centerInside && overlap / refinedArea >= 0.5 && areaRatio >= 0.25 && areaRatio <= 1.65;
+  return centerInside && overlap / refinedArea >= 0.75 && areaRatio >= 0.28 && areaRatio <= 1.4;
 }
 
 function parseSamBoxes(text: string): Map<number, [number, number, number, number]> {
@@ -544,10 +556,11 @@ export async function refineMasksWithSam31<T extends SamMask>(
   const model = process.env.META_SAM_MODEL || 'sam-3.1';
   const prompt = `<0f>${actionable
     .map((mask, index) => {
-      const x1 = Math.round(mask.bbox[0] * size.w);
-      const y1 = Math.round(mask.bbox[1] * size.h);
-      const x2 = Math.max(x1 + 2, Math.round((mask.bbox[0] + mask.bbox[2]) * size.w));
-      const y2 = Math.max(y1 + 2, Math.round((mask.bbox[1] + mask.bbox[3]) * size.h));
+      const search = inflateBox(mask.bbox, 0.6);
+      const x1 = Math.round(search[0] * size.w);
+      const y1 = Math.round(search[1] * size.h);
+      const x2 = Math.max(x1 + 2, Math.round((search[0] + search[2]) * size.w));
+      const y2 = Math.max(y1 + 2, Math.round((search[1] + search[3]) * size.h));
       return `${index + 1}<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${size.w};h=${size.h}|>`;
     })
     .join(',')}`;
