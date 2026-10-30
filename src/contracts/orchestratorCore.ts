@@ -170,7 +170,7 @@ export function salvageOrchestrationPlan(raw: unknown): OrchestrationPlan | null
 
   const parsed = OrchestrationPlanSchema.safeParse({
     summary: typeof source.summary === 'string' ? source.summary : undefined,
-    detectedObjects,
+    detectedObjects: detectedObjects ? tightenAndDeoverlapBoxes(detectedObjects) : undefined,
     requiresHumanConfirmation:
       typeof source.requiresHumanConfirmation === 'boolean' ? source.requiresHumanConfirmation : true,
     actions,
@@ -275,6 +275,39 @@ function clampUnitBBox(raw: unknown): [number, number, number, number] | null {
     Number(w.toFixed(3)),
     Number(h.toFixed(3)),
   ];
+}
+
+export function tightenAndDeoverlapBoxes<
+  T extends { id: string; label: string; bbox: [number, number, number, number] }
+>(objects: T[]): T[] {
+  const result = objects.map((o) => ({ ...o, bbox: [...o.bbox] as [number, number, number, number] }));
+
+  for (let i = 0; i < result.length; i++) {
+    for (let j = 0; j < result.length; j++) {
+      if (i === j) continue;
+      const a = result[i].bbox;
+      const b = result[j].bbox;
+
+      const aRight = a[0] + a[2];
+      const aBottom = a[1] + a[3];
+      const bRight = b[0] + b[2];
+      const bBottom = b[1] + b[3];
+
+      const overlapX = Math.min(aRight, bRight) - Math.max(a[0], b[0]);
+      const overlapY = Math.min(aBottom, bBottom) - Math.max(a[1], b[1]);
+
+      if (overlapX > 0 && overlapY > 0) {
+        const areaA = a[2] * a[3];
+        const areaB = b[2] * b[3];
+        // Si la caja A es más grande y empieza a la izquierda de la caja B (ej. RAM pisando SSD),
+        // recortamos el ancho de A para que frene justo antes de B:
+        if (areaA > areaB && a[0] < b[0] && b[0] - a[0] >= 0.04) {
+          a[2] = Number((b[0] - a[0] - 0.008).toFixed(3));
+        }
+      }
+    }
+  }
+  return result;
 }
 
 export function executeMuseCodeMarginCalc(

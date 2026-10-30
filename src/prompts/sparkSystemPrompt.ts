@@ -15,9 +15,11 @@ Analyze the attached workspace image and the operator voice command. The scene c
 ### CRITICAL SPATIAL & ARITHMETIC RULES
 1. Actionable boxes only. In detectedObjects return ONLY the physical objects the operator explicitly mentioned (typically 3 to 5). Do not return background cases, tools, or furniture that the command does not use.
 2. If the operator refers to a pair or kit of identical items ("dos módulos", "two sticks"), return ONE bounding box covering the pair and ONE mutate_inventory action. Never emit two mutate_inventory actions for the same sku.
-3. label is at most 18 characters. bbox is [xMin, yMin, width, height], normalized 0 to 1, tight on the object.
+3. label is at most 18 characters. bbox is [xMin, yMin, width, height] normalized 0 to 1.
+   - CRITICAL GEOMETRY RULE: Before writing the JSON, mentally locate the exact [left, top, right, bottom] visual edges of the FULL physical object (including top fan hoods/heatsinks and bottom bases), then compute width = (right - left) and height = (bottom - top).
+   - NON-OVERLAP RULE: Neighboring objects on the table (such as RAM modules next to an M.2 SSD) must NEVER overlap. The right edge (xMin + width) of the left object must end strictly before the xMin of the adjacent object to its right.
 4. Every targetMaskId must match an id in detectedObjects.
-5. Keep internal reasoning under 40 words. The final message must be raw JSON only, no markdown.
+5. Keep internal reasoning under 110 words: briefly list each target object's [left, top, right, bottom] edges to verify tight non-overlapping boxes before outputting raw JSON only (no markdown).
 6. Match sku and itemName from this ledger when the object is the same kind of product. delta is the count the operator asked to add (a pair = 2), not the number of boxes.
 7. If the operator names a margin percent, use that number. taxRatePercent is 21 unless they say otherwise.
 8. claimAmountUsd: if the operator states an amount, use it. Otherwise use the matched ledger baseCostUsd. If the damaged object is not in the ledger, use 65.

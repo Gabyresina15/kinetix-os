@@ -27,6 +27,7 @@ import {
   extractRealCropsFromFrame,
   persistErpMutation,
   sanitizeReasoningToTelemetry,
+  getPersistenceDb,
 } from './services/spatialCropperAndDb';
 
 const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
@@ -56,6 +57,67 @@ export const LIVE_STORE_STATE = {
   claims: [] as any[],
   catalogDrafts: [] as any[],
 };
+
+// Rutina de sincronización inicial con MongoDB
+async function syncStoreStateFromMongo() {
+  try {
+    const db = await getPersistenceDb();
+    if (!db) return;
+
+    // Sincronizar Inventario
+    const inventoryItems = await db.collection('inventory_mutations').find().sort({ createdAt: -1 }).toArray();
+    const latestStocks = new Map();
+    for (const item of inventoryItems) {
+      if (!latestStocks.has(item.sku)) {
+        latestStocks.set(item.sku, item);
+      }
+    }
+    if (latestStocks.size > 0) {
+      // Reconstruir el estado de inventario basado en los últimos registros de MongoDB
+      const mergedInventory = Array.from(latestStocks.values()).map(doc => ({
+        sku: doc.sku,
+        name: doc.name || doc.sku,
+        stock: doc.newStock,
+        standardInboundLot: doc.delta || 1,
+        baseCostUsd: doc.baseCostUsd || 95.0,
+        sellPriceUsd: doc.sellPriceUsd || 158.0,
+      }));
+      // Mezclamos con el inicial por si faltan SKUs base
+      const finalInventory = [...INITIAL_INVENTORY()];
+      for (const merged of mergedInventory) {
+        const idx = finalInventory.findIndex(i => i.sku === merged.sku);
+        if (idx !== -1) {
+          finalInventory[idx] = merged;
+        } else {
+          finalInventory.unshift(merged);
+        }
+      }
+      LIVE_STORE_STATE.inventory = finalInventory;
+    }
+
+    // Cargar últimos claims (tickets de soporte)
+    const recentClaims = await db.collection('supplier_claims').find().sort({ createdAt: -1 }).limit(10).toArray();
+    if (recentClaims.length > 0) {
+      LIVE_STORE_STATE.claims = recentClaims.map(c => ({
+        id: c.ticketId,
+        mongoId: c._id.toString(),
+        maskId: c.maskId,
+        objectLabel: c.label,
+        reason: c.reason,
+        amountUsd: c.amountUsd,
+        thresholdUsd: c.thresholdUsd,
+        guardrailStatus: c.amountUsd >= 50 ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED',
+      }));
+    }
+
+    console.log('[Kinetix] 🟢 Memory State synced successfully from MongoDB.');
+  } catch (error) {
+    console.error('[Kinetix] ⚠️ Failed to sync with MongoDB at startup', error);
+  }
+}
+
+// Ejecutar sincronización al arrancar
+syncStoreStateFromMongo();
 
 const ZERO_TRUST_LIMIT_USD = 50;
 
@@ -293,9 +355,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
     );
 
-    for (const action of orderedActions) {
-      await new Promise((r) => setTimeout(r, 260));
-
+    const toolPromises = orderedActions.map(async (action) => {
       if (action.tool === 'quarantine_and_claim') {
         const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
         const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
@@ -452,7 +512,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           result: { ...vmResult, updatedSku: priced?.sku || 'SKU-DDR5-32GB-KIT' },
         });
       }
-    }
+    });
+
+    await Promise.all(toolPromises);
 
     sendEvent('ORCHESTRATION_COMPLETE', {
       totalElapsedMs: Date.now() - startedAt,

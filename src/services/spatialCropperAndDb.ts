@@ -12,12 +12,17 @@ export async function getPersistenceDb(): Promise<any> {
   if (Date.now() < mongoUnavailableUntil) return null;
   try {
     const { MongoClient } = await import('mongodb');
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+    // Usamos el MONGO_URI configurado en el .env
+    const uri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/kinetix_erp';
     const client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
     await client.connect();
-    persistenceDb = client.db('kinetix');
+    // Extraemos el nombre de la base de datos de la URI o usamos fallback
+    const dbName = uri.split('/').pop()?.split('?')[0] || 'kinetix_erp';
+    persistenceDb = client.db(dbName);
+    console.log(`[MongoDB] ✅ Connected directly to ${dbName}`);
     return persistenceDb;
-  } catch {
+  } catch (err) {
+    console.warn(`[MongoDB] ⚠️ Connection failed, falling back to local files. Error: ${(err as Error).message}`);
     mongoUnavailableUntil = Date.now() + 30_000;
     return null;
   }
@@ -31,6 +36,8 @@ export async function persistErpMutation(collection: string, doc: any): Promise<
       return { mongoId: result.insertedId.toString() };
     }
   } catch {}
+
+  // Fallback a archivos si MongoDB explota
   const ledgerDir = path.join(process.cwd(), 'data', 'ledger');
   await fs.mkdir(ledgerDir, { recursive: true });
   const id = `LEDGER-${Date.now().toString(36).toUpperCase()}`;

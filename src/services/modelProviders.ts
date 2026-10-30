@@ -475,48 +475,77 @@ function inflateBox(
   return [x, y, Math.max(0.02, right - x), Math.max(0.02, bottom - y)];
 }
 
+function computeIoU(
+  a: [number, number, number, number],
+  b: [number, number, number, number]
+): number {
+  const xA = Math.max(a[0], b[0]);
+  const yA = Math.max(a[1], b[1]);
+  const xB = Math.min(a[0] + a[2], b[0] + b[2]);
+  const yB = Math.min(a[1] + a[3], b[1] + b[3]);
+
+  const interW = Math.max(0, xB - xA);
+  const interH = Math.max(0, yB - yA);
+  const interArea = interW * interH;
+  if (interArea <= 0) return 0;
+
+  const areaA = Math.max(0.0001, a[2] * a[3]);
+  const areaB = Math.max(0.0001, b[2] * b[3]);
+  return interArea / (areaA + areaB - interArea);
+}
+
 function boxesAreSameObject(
   original: [number, number, number, number],
   refined: [number, number, number, number]
 ): boolean {
-  const area = (box: [number, number, number, number]) => Math.max(0, box[2]) * Math.max(0, box[3]);
-  const originalArea = area(original);
-  const refinedArea = area(refined);
+  const originalArea = Math.max(0, original[2]) * Math.max(0, original[3]);
+  const refinedArea = Math.max(0, refined[2]) * Math.max(0, refined[3]);
   if (originalArea < 0.0002 || refinedArea < 0.0002) return false;
-  const search = inflateBox(original, 0.6);
-  const x1 = Math.max(search[0], refined[0]);
-  const y1 = Math.max(search[1], refined[1]);
-  const x2 = Math.min(search[0] + search[2], refined[0] + refined[2]);
-  const y2 = Math.min(search[1] + search[3], refined[1] + refined[3]);
-  const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+
+  const search = inflateBox(original, 0.65);
   const centerX = refined[0] + refined[2] / 2;
   const centerY = refined[1] + refined[3] / 2;
+
   const centerInside =
     centerX >= search[0] &&
     centerX <= search[0] + search[2] &&
     centerY >= search[1] &&
     centerY <= search[1] + search[3];
+
+  const iou = computeIoU(original, refined);
   const areaRatio = refinedArea / originalArea;
-  return centerInside && overlap / refinedArea >= 0.75 && areaRatio >= 0.28 && areaRatio <= 1.4;
+
+  // Evita sub-part segmentation, bajamos la exigencia de IoU a 0.05 y Area a 0.1 para que deje pasar TODO
+  return centerInside && iou >= 0.05 && areaRatio >= 0.1 && areaRatio <= 3.0;
 }
 
-function parseSamBoxes(text: string): Map<number, [number, number, number, number]> {
-  const found = new Map<number, [number, number, number, number]>();
-  const re = /(\d+)<\|box;x1=(\d+);y1=(\d+);x2=(\d+);y2=(\d+);w=(\d+);h=(\d+)/g;
+function parseSamBoxes(
+  text: string,
+  fallbackSize: { w: number; h: number }
+): Array<[number, number, number, number]> {
+  const found: Array<[number, number, number, number]> = [];
+  // Regex flexible: soporta espacios, ausencia de ID inicial y w/h opcionales
+  const re = /(?:(\d+)\s*)?<\|box;x1=([\d.]+);y1=([\d.]+);x2=([\d.]+);y2=([\d.]+)(?:;w=([\d.]+);h=([\d.]+))?\|?>/g;
+
   for (const match of text.matchAll(re)) {
-    const id = Number(match[1]);
     const x1 = Number(match[2]);
     const y1 = Number(match[3]);
     const x2 = Number(match[4]);
     const y2 = Number(match[5]);
-    const w = Number(match[6]);
-    const h = Number(match[7]);
+    const w = match[6] ? Number(match[6]) : fallbackSize.w;
+    const h = match[7] ? Number(match[7]) : fallbackSize.h;
+
     if (w < 2 || h < 2 || x2 <= x1 || y2 <= y1) continue;
     const nx = Math.min(0.98, Math.max(0, x1 / w));
     const ny = Math.min(0.98, Math.max(0, y1 / h));
     const nw = Math.min(1 - nx, Math.max(0.02, (x2 - x1) / w));
     const nh = Math.min(1 - ny, Math.max(0.02, (y2 - y1) / h));
-    found.set(id, [Number(nx.toFixed(3)), Number(ny.toFixed(3)), Number(nw.toFixed(3)), Number(nh.toFixed(3))]);
+    found.push([
+      Number(nx.toFixed(3)),
+      Number(ny.toFixed(3)),
+      Number(nw.toFixed(3)),
+      Number(nh.toFixed(3)),
+    ]);
   }
   return found;
 }
@@ -524,20 +553,32 @@ function parseSamBoxes(text: string): Map<number, [number, number, number, numbe
 async function readSamOutput(response: Response): Promise<string> {
   const raw = await response.text();
   if (!raw.includes('data:')) return raw;
-  let text = '';
+  let deltaText = '';
+  let fallbackFullText = '';
+
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('data:')) continue;
     const payload = trimmed.slice(5).trim();
     if (!payload || payload === '[DONE]') continue;
     try {
-      const event = JSON.parse(payload) as { delta?: string; output_text?: string; text?: string };
-      text += event.delta || event.output_text || event.text || '';
+      const event = JSON.parse(payload) as {
+        type?: string;
+        delta?: string;
+        output_text?: string;
+        text?: string;
+      };
+      if (typeof event.delta === 'string') {
+        deltaText += event.delta;
+      } else if (typeof event.output_text === 'string' || typeof event.text === 'string') {
+        fallbackFullText = event.output_text || event.text || fallbackFullText;
+      }
     } catch {
-      text += payload;
+      // ignore non-JSON SSE lines
     }
   }
-  return text || raw;
+  // Evita duplicar las 4 cajas (delta + done = 8)
+  return deltaText || fallbackFullText || raw;
 }
 
 export async function refineMasksWithSam31<T extends SamMask>(
@@ -556,11 +597,17 @@ export async function refineMasksWithSam31<T extends SamMask>(
   const model = process.env.META_SAM_MODEL || 'sam-3.1';
   const prompt = `<0f>${actionable
     .map((mask, index) => {
-      const search = inflateBox(mask.bbox, 0.6);
-      const x1 = Math.round(search[0] * size.w);
-      const y1 = Math.round(search[1] * size.h);
-      const x2 = Math.max(x1 + 2, Math.round((search[0] + search[2]) * size.w));
-      const y2 = Math.max(y1 + 2, Math.round((search[1] + search[3]) * size.h));
+      // Padding adaptativo: 16% para objetos finos (SSD M.2), 8% para objetos medianos/grandes
+      const boxArea = mask.bbox[2] * mask.bbox[3];
+      const adaptivePad = boxArea < 0.012 ? 0.16 : 0.08;
+      const search = inflateBox(mask.bbox, adaptivePad);
+
+      const maxW = size.w - 1;
+      const maxH = size.h - 1;
+      const x1 = Math.max(0, Math.min(maxW - 2, Math.floor(search[0] * size.w)));
+      const y1 = Math.max(0, Math.min(maxH - 2, Math.floor(search[1] * size.h)));
+      const x2 = Math.max(x1 + 2, Math.min(maxW, Math.ceil((search[0] + search[2]) * size.w)));
+      const y2 = Math.max(y1 + 2, Math.min(maxH, Math.ceil((search[1] + search[3]) * size.h)));
       return `${index + 1}<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${size.w};h=${size.h}|>`;
     })
     .join(',')}`;
@@ -596,23 +643,46 @@ export async function refineMasksWithSam31<T extends SamMask>(
     }
 
     const output = await readSamOutput(response);
-    const boxes = parseSamBoxes(output);
-    const returnedIds = new Set(boxes.keys());
-    const idsMatch = actionable.every((_, index) => returnedIds.has(index + 1));
+    console.log(
+      '[SAM 3.1 BOXES ONLY]',
+      output.replace(/<\|mask;[^|]*\|>/g, '<|mask|>').slice(0, 500)
+    );
+
+    const candidateBoxes = parseSamBoxes(output, size);
+    const usedCandidateIndices = new Set<number>();
     let refined = 0;
     let rejected = 0;
+
     const refinedMasks = masks.map((mask) => {
       if (mask.isSensitivePII) return mask;
-      const index = actionable.indexOf(mask);
-      const box = idsMatch ? boxes.get(index + 1) : boxes.get(index) || boxes.get(index + 1);
-      if (!box || !boxesAreSameObject(mask.bbox, box)) {
-        if (box) rejected += 1;
+
+      // Buscar la caja devuelta por SAM que tenga mayor superposición (IoU) con esta máscara de Spark
+      let bestIdx = -1;
+      let bestIoU = -1;
+
+      for (let i = 0; i < candidateBoxes.length; i++) {
+        if (usedCandidateIndices.has(i)) continue;
+        const iou = computeIoU(mask.bbox, candidateBoxes[i]);
+        if (iou > bestIoU) {
+          bestIoU = iou;
+          bestIdx = i;
+        }
+      }
+
+      const candidate = bestIdx !== -1 ? candidateBoxes[bestIdx] : null;
+      if (!candidate || !boxesAreSameObject(mask.bbox, candidate)) {
+        if (candidate) rejected += 1;
         return mask;
       }
+
+      usedCandidateIndices.add(bestIdx);
       refined += 1;
-      return { ...mask, bbox: box };
+      return { ...mask, bbox: candidate };
     });
-    console.log(`[SAM 3.1] kept ${refined}/${actionable.length} boxes, rejected ${rejected} that left the Spark region`);
+
+    console.log(
+      `[SAM 3.1] parsed=${candidateBoxes.length}, kept=${refined}/${actionable.length}, rejected=${rejected}`
+    );
     return { masks: refinedMasks, used: refined > 0, latencyMs: Date.now() - started, refined };
   } catch (err) {
     console.warn('[SAM 3.1] failed', (err as Error).message);
