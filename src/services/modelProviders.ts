@@ -554,31 +554,19 @@ async function readSamOutput(response: Response): Promise<string> {
   const raw = await response.text();
   if (!raw.includes('data:')) return raw;
   let deltaText = '';
-  let fallbackFullText = '';
-
+  let finalText = '';
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('data:')) continue;
     const payload = trimmed.slice(5).trim();
     if (!payload || payload === '[DONE]') continue;
     try {
-      const event = JSON.parse(payload) as {
-        type?: string;
-        delta?: string;
-        output_text?: string;
-        text?: string;
-      };
-      if (typeof event.delta === 'string') {
-        deltaText += event.delta;
-      } else if (typeof event.output_text === 'string' || typeof event.text === 'string') {
-        fallbackFullText = event.output_text || event.text || fallbackFullText;
-      }
-    } catch {
-      // ignore non-JSON SSE lines
-    }
+      const ev = JSON.parse(payload) as { delta?: string; output_text?: string; text?: string };
+      if (typeof ev.delta === 'string') deltaText += ev.delta;
+      else if (ev.output_text || ev.text) finalText = ev.output_text || ev.text || finalText;
+    } catch {}
   }
-  // Evita duplicar las 4 cajas (delta + done = 8)
-  return deltaText || fallbackFullText || raw;
+  return deltaText || finalText || raw;
 }
 
 export async function refineMasksWithSam31<T extends SamMask>(

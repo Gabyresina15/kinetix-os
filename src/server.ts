@@ -33,29 +33,10 @@ import {
 const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
 app.register(cors, { origin: '*' });
 
-const INITIAL_INVENTORY = () => [
-  {
-    sku: 'SKU-DDR5-32GB-KIT',
-    name: 'Fury Beast DDR5 32GB (2x16GB) Black',
-    stock: 14,
-    standardInboundLot: 2,
-    baseCostUsd: 95.0,
-    sellPriceUsd: 158.0,
-  },
-  {
-    sku: 'SKU-NVME-2TB-GEN4',
-    name: 'M.2 NVMe PCIe 4.0 SSD 2TB',
-    stock: 8,
-    standardInboundLot: 1,
-    baseCostUsd: 110.0,
-    sellPriceUsd: 185.0,
-  },
-];
-
 export const LIVE_STORE_STATE = {
-  inventory: INITIAL_INVENTORY(),
-  claims: [] as any[],
-  catalogDrafts: [] as any[],
+  inventory: [] as any[],
+  claims: [] as Record<string, unknown>[],
+  catalogDrafts: [] as Record<string, unknown>[],
 };
 
 // Rutina de sincronización inicial con MongoDB
@@ -82,23 +63,13 @@ async function syncStoreStateFromMongo() {
         baseCostUsd: doc.baseCostUsd || 95.0,
         sellPriceUsd: doc.sellPriceUsd || 158.0,
       }));
-      // Mezclamos con el inicial por si faltan SKUs base
-      const finalInventory = [...INITIAL_INVENTORY()];
-      for (const merged of mergedInventory) {
-        const idx = finalInventory.findIndex(i => i.sku === merged.sku);
-        if (idx !== -1) {
-          finalInventory[idx] = merged;
-        } else {
-          finalInventory.unshift(merged);
-        }
-      }
-      LIVE_STORE_STATE.inventory = finalInventory;
+      LIVE_STORE_STATE.inventory = mergedInventory;
     }
 
     // Cargar últimos claims (tickets de soporte)
     const recentClaims = await db.collection('supplier_claims').find().sort({ createdAt: -1 }).limit(10).toArray();
     if (recentClaims.length > 0) {
-      LIVE_STORE_STATE.claims = recentClaims.map(c => ({
+      LIVE_STORE_STATE.claims = recentClaims.map((c: any) => ({
         id: c.ticketId,
         mongoId: c._id.toString(),
         maskId: c.maskId,
@@ -494,9 +465,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           } catch {}
         }
 
-        const priced =
-          LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-DDR5-32GB-KIT') ||
-          LIVE_STORE_STATE.inventory[0];
+        // Buscar primero por el nombre/sku del prompt o usar el último item agregado al inventario
+        const targetHint = categoryOf(action.sku || action.itemName || '');
+        const priced = targetHint
+          ? LIVE_STORE_STATE.inventory.find(i => categoryOf(`${i.sku} ${i.name}`) === targetHint)
+          : LIVE_STORE_STATE.inventory[0];
+
         const baseRefCost = priced?.baseCostUsd || 95;
         const vmResult = executeMuseCodeMarginCalc(
           rawCode,
@@ -504,7 +478,16 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           action.targetMarginPercent,
           action.taxRatePercent
         );
-        if (priced) priced.sellPriceUsd = vmResult.finalPrice;
+
+        if (priced) {
+          priced.sellPriceUsd = vmResult.finalPrice;
+          await persistErpMutation('inventory_mutations', {
+            sku: priced.sku,
+            newPrice: vmResult.finalPrice,
+            marginApplied: action.targetMarginPercent
+          });
+        }
+
         sendEvent('TOOL_MUTATED', {
           tool: action.tool,
           status: 'VM_EXECUTED',
@@ -528,15 +511,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 });
 
 app.post('/api/confirm-guardrail', async (_request, reply) => {
-  const held = LIVE_STORE_STATE.claims.find((c) => c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH');
+  const held = LIVE_STORE_STATE.claims.find((c: any) => c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH') as any;
   if (!held) return reply.status(404).send({ ok: false });
 
   const dispatch = await dispatchSupplierClaimNotification({
-    id: held.id,
-    mongoId: held.mongoId,
-    reason: held.reason,
-    amountUsd: held.amountUsd,
-    cropBase64: held.cropBase64,
+    id: held.id as string,
+    mongoId: held.mongoId as string | undefined,
+    reason: held.reason as string,
+    amountUsd: held.amountUsd as number,
+    cropBase64: held.cropBase64 as string | undefined,
   });
 
   held.guardrailStatus = 'AUTHORIZED_AND_DISPATCHED';
@@ -546,10 +529,14 @@ app.post('/api/confirm-guardrail', async (_request, reply) => {
 });
 
 app.post('/api/reset-demo', async (_request, reply) => {
-  LIVE_STORE_STATE.inventory = INITIAL_INVENTORY();
+  await syncStoreStateFromMongo(); // Vuelve a recargar de la base de datos masiva
   LIVE_STORE_STATE.claims = [];
   LIVE_STORE_STATE.catalogDrafts = [];
   return reply.send({ ok: true });
+});
+
+app.get('/api/live-ledger', async (_request, reply) => {
+  return reply.send({ ok: true, inventory: LIVE_STORE_STATE.inventory });
 });
 
 app.listen({ port: Number(process.env.PORT) || 4000, host: '0.0.0.0' }, () => {

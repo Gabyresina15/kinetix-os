@@ -78,6 +78,8 @@ const ActionSchema = z.discriminatedUnion('tool', [
     tool: z.literal('recalculate_margins_vm'),
     targetMarginPercent: z.coerce.number().default(32),
     taxRatePercent: z.coerce.number().default(21),
+    sku: z.string().optional(),
+    itemName: z.string().optional()
   }),
 ]);
 
@@ -328,7 +330,9 @@ export function executeMuseCodeMarginCalc(
 
   try {
     const sandbox = { baseCost, targetMarginPct, taxPct, outputPrice: 0 };
-    vm.createContext(sandbox);
+    vm.createContext(sandbox, {
+      codeGeneration: { strings: false, wasm: false },
+    });
 
     const wrappedScript = `
       ${strippedBody}
@@ -336,7 +340,8 @@ export function executeMuseCodeMarginCalc(
         outputPrice = Number(calculatePrice(baseCost, targetMarginPct, taxPct).toFixed(2));
       }
     `;
-    vm.runInContext(wrappedScript, sandbox, { timeout: 300 });
+    const script = new vm.Script(wrappedScript);
+    script.runInContext(sandbox, { timeout: 50 });
 
     if (typeof sandbox.outputPrice === 'number' && sandbox.outputPrice > baseCost && !Number.isNaN(sandbox.outputPrice)) {
       return {
@@ -346,7 +351,7 @@ export function executeMuseCodeMarginCalc(
       };
     }
     throw new Error('Invalid numerical output from VM');
-  } catch {
+  } catch (e) {
     const fallbackCodeSnippet = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
     return {
       finalPrice: deterministicFallbackPrice,
