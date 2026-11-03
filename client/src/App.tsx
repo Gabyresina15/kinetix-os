@@ -446,14 +446,6 @@ export default function App() {
                     : s
                 )
               );
-
-              setTimeout(() => {
-                setInventory((current) =>
-                  current.map((item) =>
-                    item.sku === invResult.sku ? { ...item, _highlightDelta: undefined } : item
-                  )
-                );
-              }, 4500);
             }
 
             if (tool === 'generate_studio_catalog' && result) {
@@ -498,12 +490,6 @@ export default function App() {
                 model: normalizedVm.policyModelUsed || 'Muse Code / Wonder + 50ms Sandbox',
                 detail: detailText,
               });
-
-              setTimeout(() => {
-                setInventory((current) =>
-                  current.map((item) => (priceBySku.has(item.sku) ? { ...item, _repriced: undefined } : item))
-                );
-              }, 4500);
             }
           });
         }
@@ -528,7 +514,19 @@ export default function App() {
             speakTactical('Spatial lock complete. Actionable assets indexed.');
 
             if (data.storeState && Array.isArray(data.storeState.inventory)) {
-              setInventory(data.storeState.inventory);
+              setInventory((prev) => {
+                const badgesBySku = new Map(
+                  prev.map((it) => [it.sku, { _highlightDelta: it._highlightDelta, _repriced: it._repriced }])
+                );
+                const merged = data.storeState.inventory.map((it: InventoryItem) => ({
+                  ...it,
+                  ...badgesBySku.get(it.sku),
+                }));
+                return [
+                  ...merged.filter((it: InventoryItem) => it._highlightDelta || it._repriced),
+                  ...merged.filter((it: InventoryItem) => !it._highlightDelta && !it._repriced),
+                ];
+              });
             }
             void fetchAuditLedger();
           });
@@ -1115,13 +1113,9 @@ export default function App() {
               <span className="text-[8px] font-mono uppercase tracking-wider text-slate-500">PRESETS:</span>
               <button
                 type="button"
-                onClick={() =>
-                  setVoiceText(
-                    'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock los dos módulos RAM y el SSD M.2 y recalculá precios con 32% de margen.'
-                  )
-                }
+                onClick={() => setVoiceText(DEFAULT_PROMPT)}
                 className="px-1.5 py-0.5 rounded border border-rose-500/40 bg-rose-950/30 hover:bg-rose-900/50 text-[8px] font-mono font-bold text-rose-300 cursor-pointer transition-colors"
-                title="Scenario 1: Critical structural fin damage on $78 cooler -> $66.30 claim (>= $50 USD Guardrail Hold)"
+                title="Scenario 1: Critical structural fin damage on $78 cooler -> $66.30 claim (>= $50 USD Guardrail Hold) + 512x512 Studio Catalog + 32% Reprice"
               >
                 [1] CRITICAL DAMAGE ($66.30 HOLD)
               </button>
@@ -1368,12 +1362,23 @@ export default function App() {
               <Terminal className="w-3.5 h-3.5 text-amber-400" /> DYNAMIC POLICY SANDBOX (BOUNDED 50ms)
             </div>
             {vmExecution ? (
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <pre className="text-[9px] font-mono text-cyan-300 bg-[#050608] p-2 rounded border border-slate-800/80 overflow-x-auto leading-snug max-h-[4.25rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#334155_#050608]">
                   {vmExecution.executedCode}
                 </pre>
-                <div className="text-[9.5px] font-mono text-emerald-400 truncate">
-                  {`// Output: $${Number(vmExecution.finalPrice).toFixed(2)} USD | engine: ${vmExecution.sandboxEngine || 'quickjs-wasm'} (50ms) | assertions: ${vmExecution.invariantsPassed !== false ? 'PASS' : 'FAIL'} | fallback: ${Boolean(vmExecution.usedFallback)}`}
+                <div className="flex flex-wrap items-center gap-1 text-[8.5px] font-mono">
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold">
+                    OUT: ${Number(vmExecution.finalPrice).toFixed(2)} USD
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-cyan-300">
+                    {(vmExecution.sandboxEngine || 'quickjs-wasm').toUpperCase()} (50ms)
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800/50 text-emerald-400">
+                    ASSERTIONS: {vmExecution.invariantsPassed !== false ? 'PASS' : 'FAIL'}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
+                    FALLBACK: {vmExecution.usedFallback ? 'TRUE' : 'FALSE'}
+                  </span>
                 </div>
               </div>
             ) : (
