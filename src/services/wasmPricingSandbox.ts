@@ -27,7 +27,17 @@ async function loadQuickJsModule(): Promise<QuickJSWASMModule> {
   return cachedQuickJsPromise;
 }
 
-export function buildDeterministicPolicyCode(): string {
+export function buildDeterministicPolicyCode(hasCriticalAnomaly = false): string {
+  if (hasCriticalAnomaly) {
+    return [
+      'function calculatePrice(ctx) {',
+      '  const gross = ctx.cost / (1 - ctx.marginPct / 100);',
+      '  const tierFactor = ctx.stock > 120 ? 0.97 : ctx.stock < 15 ? 1.04 : 1.0;',
+      '  const qaLotSurcharge = 1.025; // +2.5% QA inspection surcharge (CRITICAL batch anomaly)',
+      '  return Number((gross * tierFactor * qaLotSurcharge * (1 + ctx.taxPct / 100)).toFixed(2));',
+      '}',
+    ].join('\n');
+  }
   return [
     'function calculatePrice(ctx) {',
     '  const gross = ctx.cost / (1 - ctx.marginPct / 100);',

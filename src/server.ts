@@ -832,9 +832,16 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         }
 
         if (action.tool === 'recalculate_margins_vm') {
-          let rawCode = buildDeterministicPolicyCode();
-          let policyModelLabel = 'Deterministic 50ms Sandbox Policy';
           const claimAction = activePlan.actions.find((a) => a.tool === 'quarantine_and_claim');
+          const hasCriticalAnomaly =
+            claimAction?.tool === 'quarantine_and_claim' &&
+            ((claimAction.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD ||
+              claimAction.defectSeverity === 'CRITICAL');
+          let rawCode = buildDeterministicPolicyCode(hasCriticalAnomaly);
+          let policyModelLabel =
+            mode === 'REPLAY'
+              ? 'muse-wonder-1.0 (Muse Code) [REPLAY]'
+              : 'Deterministic 50ms Sandbox Policy';
           if (mode === 'LIVE' && (hasMetaKey || hasBasetenKey)) {
             try {
               const synth = await callMuseCodeGenerator(

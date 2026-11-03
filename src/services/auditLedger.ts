@@ -51,24 +51,38 @@ function computeBlockHash(payload: {
   return createHash('sha256').update(canonical).digest('hex');
 }
 
-export async function syncAuditLedgerToDisk(
-  inventory: readonly CatalogSeedItem[] = INITIAL_CATALOG,
-  claims: Record<string, unknown>[] = []
+let lastKnownInventory: readonly CatalogSeedItem[] = INITIAL_CATALOG;
+let lastKnownClaims: Record<string, unknown>[] = [];
+let diskWriteQueue: Promise<void> = Promise.resolve();
+
+export function syncAuditLedgerToDisk(
+  inventory?: readonly CatalogSeedItem[],
+  claims?: Record<string, unknown>[]
 ): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(AUDIT_LEDGER_FILE_PATH), { recursive: true });
-    const snapshot = {
-      updatedAt: new Date().toISOString(),
-      integrity: verifyAuditChainIntegrity(),
-      skuCount: inventory.length,
-      inventory,
-      claims,
-      blocks: getAuditBlocksNewestFirst(),
-    };
-    await fs.writeFile(AUDIT_LEDGER_FILE_PATH, JSON.stringify(snapshot, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[AuditLedger] Disk snapshot skipped:', (err as Error).message);
-  }
+  if (inventory) lastKnownInventory = inventory;
+  if (claims) lastKnownClaims = claims;
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    integrity: verifyAuditChainIntegrity(),
+    skuCount: lastKnownInventory.length,
+    inventory: lastKnownInventory,
+    claims: lastKnownClaims,
+    blocks: getAuditBlocksNewestFirst(),
+  };
+
+  diskWriteQueue = diskWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      try {
+        await fs.mkdir(path.dirname(AUDIT_LEDGER_FILE_PATH), { recursive: true });
+        await fs.writeFile(AUDIT_LEDGER_FILE_PATH, JSON.stringify(snapshot, null, 2), 'utf8');
+      } catch (err) {
+        console.warn('[AuditLedger] Disk snapshot skipped:', (err as Error).message);
+      }
+    });
+
+  return diskWriteQueue;
 }
 
 export function appendAuditBlock(input: {
