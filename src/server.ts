@@ -326,7 +326,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const hasBasetenKey = hasRealApiKey(process.env.BASETEN_API_KEY);
     const hasMetaKey = hasRealApiKey(process.env.META_MODEL_API_KEY);
 
-    if (mode === 'REPLAY' || !hasBasetenKey) {
+    if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
         const preferredPath =
           process.env.REPLAY_USE_LAST_RUN === '1' ? liveFixturePath : trackedFixturePath;
@@ -350,7 +350,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         sparkModelLabel = 'golden-fallback-plan [REPLAY_NO_FIXTURE]';
         app.log.warn(`REPLAY fixture missing, using fallback plan: ${(replayErr as Error).message}`);
       }
-    } else if (mode === 'LIVE' && hasBasetenKey) {
+    } else if (mode === 'LIVE' && (hasBasetenKey || hasMetaKey)) {
       const sparkAbort = new AbortController();
       const sparkTimer = setTimeout(() => sparkAbort.abort(new Error('Baseten timeout > 45000ms')), 45_000);
       const onClientAbort = () => {

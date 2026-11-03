@@ -232,6 +232,12 @@ async function readChatStream(
   return { content, reasoning };
 }
 
+function isRealKey(raw?: string): boolean {
+  if (!raw) return false;
+  const t = raw.trim();
+  return Boolean(t && !t.startsWith('your_') && !t.endsWith('_here'));
+}
+
 export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
@@ -240,11 +246,21 @@ export async function callBasetenMuseSparkOpen(
   signal?: AbortSignal,
   onReasoningProgress?: (partialReasoning: string, elapsedMs: number) => void
 ): Promise<SparkInferenceResult> {
-  const apiKey = process.env.BASETEN_API_KEY;
-  const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
-  const model = process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026';
+  const useBaseten = isRealKey(process.env.BASETEN_API_KEY);
+  const useMetaDirect = !useBaseten && isRealKey(process.env.META_MODEL_API_KEY);
 
-  if (!apiKey) throw new Error('BASETEN_API_KEY_NOT_SET');
+  if (!useBaseten && !useMetaDirect) {
+    throw new Error('NO_SPARK_API_KEY_CONFIGURED');
+  }
+
+  const apiKey = useBaseten ? process.env.BASETEN_API_KEY!.trim() : process.env.META_MODEL_API_KEY!.trim();
+  const baseUrl = useBaseten
+    ? process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1'
+    : process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
+  const model = useBaseten
+    ? process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026'
+    : process.env.META_SPARK_MODEL || 'muse-spark-1.3';
+  const providerTag = useBaseten ? 'Baseten 2M TPM' : 'Meta Model API';
 
   const start = Date.now();
 
@@ -351,7 +367,7 @@ export async function callBasetenMuseSparkOpen(
   return {
     plan: validatedPlan,
     reasoningTrace: parsedReasoning,
-    modelUsed: `${model} (Baseten 2M TPM)`,
+    modelUsed: `${model} (${providerTag})`,
     latencyMs: Date.now() - start,
   };
 }

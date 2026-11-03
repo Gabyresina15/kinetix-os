@@ -64,33 +64,39 @@ flowchart LR
 
 ---
 
-## 4. Judge Quickstart (Zero API Keys & Zero MongoDB Required)
+## 4. Judge Quickstart (Live API Keys OR Zero-Key Recorded Sample Mode)
 
-You can run the full deterministic pipeline and automated test suite locally in under 60 seconds using the recorded Baseten `muse-spark-open-1026` golden fixture (`fixtures/golden-path/golden-spark-replay.json`):
+Clone both repositories and install dependencies (no local MongoDB installation is required — if `mongod` is offline, KINETIX OS automatically persists ledger mutations to `data/ledger/*.json`):
 
 ```bash
 git clone https://github.com/Gabyresina15/kinetix-os.git
 cd kinetix-os
 npm install
-
-# 1. Run automated unit & integration tests (WASM RCE isolation, 50ms loop interrupt, invariants, PII pixel scrubbing, Muse Voice WAV check, SHA-256 Ledger & Undo, TCP SSE replay)
 npm test
-
-# 2. Start orchestrator in deterministic REPLAY mode on http://localhost:4000
-npm run replay
 ```
 
-### Running in `LIVE` Mode (Baseten + Meta Model API)
+### Option A — Live Meta AI Execution (Using Judge API Keys)
 
-1. Copy `.env.example` to `.env` and populate `BASETEN_API_KEY` and `META_MODEL_API_KEY` (plus optional `MONGO_URI`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`).
-2. *(Optional)* Seed MongoDB with the 31 canonical hardware SKUs:
+1. Copy `.env.example` to `.env`:
    ```bash
-   npm run seed
+   cp .env.example .env
    ```
-3. Start the live orchestrator:
+2. Add your API key(s) in `.env`:
+   - **`META_MODEL_API_KEY` (Official Meta Model API):** Enables **all 5 live models** out of the box (`muse-voice-transcribe-1.0`, `sam-3.1`, `muse-image-1.0`, `muse-wonder-1.0`, and automatic fallback to `muse-spark-1.3` if no Baseten key is supplied).
+   - **`BASETEN_API_KEY` (Baseten Serverless GPU — Open-Weights Track):** Routes spatial grounding & DAG planning to open-weight **`meta-models/muse-spark-open-1026`** (`2M TPM`).
+   - *(Optional)* `MONGO_URI`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
+3. Start the live orchestrator on `http://localhost:4000` (and `kinetix-ui` on `http://localhost:5173`):
    ```bash
    npm run dev
    ```
+
+### Option B — Keyless Recorded Sample Replay (Zero API Keys Required)
+
+If evaluating without live API credits, run the deterministic replay mode backed by real recorded Baseten `meta-models/muse-spark-open-1026` provenance (`fixtures/golden-path/golden-spark-replay.json`), live `Sharp` pixel cropping, live **QuickJS WebAssembly** execution, and the **SHA-256 Audit Ledger**:
+
+```bash
+npm run replay
+```
 
 ### One-Command Docker Compose
 
