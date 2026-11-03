@@ -13,7 +13,10 @@ export function buildMuseSparkSystemPrompt(
 Analyze the attached workspace image and the operator voice command. The scene can be any domain. Do not assume a specific product catalog beyond the ledger below.
 
 ### CRITICAL SPATIAL & ARITHMETIC RULES
-1. Actionable boxes only. In detectedObjects return ONLY the physical objects the operator explicitly mentioned (typically 3 to 5). Do not return background cases, tools, or furniture that the command does not use.
+1. Actionable boxes + mandatory PII gating:
+   - Return the physical objects the operator explicitly mentioned (typically 3 to 5) with isSensitivePII: false.
+   - MANDATORY PII RULE: ALSO inspect the workspace for any shipping label, packing slip, invoice, customer address sticker, employee ID badge, personal phone screen, or human face. Always include every such region in detectedObjects with isSensitivePII: true and label: "PII Label" (or "Operator Face") so the Sharp Crop Gate scrubs those pixels before external export.
+   - Ignore unrelated background cases, tools, or furniture.
 2. If the operator refers to a pair or kit of identical items ("dos módulos", "two sticks"), return ONE bounding box covering the pair and ONE mutate_inventory action. Never emit two mutate_inventory actions for the same sku.
 3. label is at most 18 characters. bbox is [xMin, yMin, width, height] normalized 0 to 1.
    - CRITICAL GEOMETRY RULE: Before writing the JSON, mentally locate the exact [left, top, right, bottom] visual edges of the FULL physical object (including top fan hoods/heatsinks and bottom bases), then compute width = (right - left) and height = (bottom - top).

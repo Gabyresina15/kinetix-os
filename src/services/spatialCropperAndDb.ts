@@ -127,11 +127,38 @@ export async function extractRealCropsFromFrame(
 
   try {
     const base64Data = frameBase64.replace(/^data:image\/\w+;base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
-    const image = sharp(buffer);
-    const meta = await image.metadata();
+    const rawBuffer = Buffer.from(base64Data, 'base64');
+    const meta = await sharp(rawBuffer).metadata();
     const imgW = meta.width || 1280;
     const imgH = meta.height || 720;
+
+    // Physical PII Pixel Scrubbing: burn opaque redaction shields onto a sanitized frame buffer
+    // BEFORE cropping any object evidence so raw PII pixels never reach MongoDB or Telegram webhooks.
+    const piiMasks = masks.filter((m) => m.isSensitivePII);
+    let workingBuffer = rawBuffer;
+    if (piiMasks.length > 0) {
+      const overlays = piiMasks
+        .map((m) => {
+          const left = Math.max(0, Math.floor(m.bbox[0] * imgW));
+          const top = Math.max(0, Math.floor(m.bbox[1] * imgH));
+          const width = Math.min(imgW - left, Math.max(12, Math.ceil(m.bbox[2] * imgW)));
+          const height = Math.min(imgH - top, Math.max(12, Math.ceil(m.bbox[3] * imgH)));
+          const svg = Buffer.from(
+            `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+              `<rect width="100%" height="100%" fill="#111827" stroke="#f59e0b" stroke-width="3"/>` +
+              `<text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#fbbf24" font-family="monospace" font-weight="bold" font-size="${Math.max(10, Math.min(20, Math.floor(height * 0.25)))}">PII REDACTED</text>` +
+              `</svg>`
+          );
+          return { input: svg, left, top };
+        })
+        .filter((o) => o.left < imgW && o.top < imgH);
+
+      if (overlays.length > 0) {
+        workingBuffer = await sharp(rawBuffer).composite(overlays).jpeg({ quality: 88 }).toBuffer();
+      }
+    }
+
+    const sanitizedImage = sharp(workingBuffer);
 
     const updated = await Promise.all(
       masks.map(async (mask) => {
@@ -146,7 +173,11 @@ export async function extractRealCropsFromFrame(
         if (width < 10 || height < 10) return mask;
 
         try {
-          const cropBuffer = await image.clone().extract({ left, top, width, height }).jpeg({ quality: 82 }).toBuffer();
+          const cropBuffer = await sanitizedImage
+            .clone()
+            .extract({ left, top, width, height })
+            .jpeg({ quality: 82 })
+            .toBuffer();
           return { ...mask, cropBase64: `data:image/jpeg;base64,${cropBuffer.toString('base64')}` };
         } catch {
           return mask;

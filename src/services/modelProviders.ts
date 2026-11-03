@@ -829,3 +829,88 @@ export async function dispatchSupplierClaimNotification(claim: {
     deliveredExternally: false,
   };
 }
+
+export async function callMuseVoiceTranscribe(
+  wavBuffer: Buffer,
+  catalogKeywords: string[] = [],
+  signal?: AbortSignal
+): Promise<{
+  transcript: string;
+  audioDurationMs: number;
+  latencyMs: number;
+  sessionId: string;
+  modelUsed: string;
+  biasedKeywordsCount: number;
+}> {
+  const started = Date.now();
+  const apiKey = process.env.META_MODEL_API_KEY;
+  if (!apiKey) throw new Error('META_MODEL_API_KEY_NOT_SET');
+
+  const rawBase = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
+  const baseUrl = rawBase.includes('api.llama.com') ? 'https://api.meta.ai/v1' : rawBase;
+  const rawModel = process.env.META_VOICE_MODEL;
+  const model =
+    !rawModel || rawModel === 'voice-transcribe' ? 'muse-voice-transcribe-1.0' : rawModel;
+
+  const domainTerms = [
+    'reclamo',
+    'margen',
+    'stock',
+    'cooler',
+    'aleta',
+    'fuente modular',
+    'estudio',
+    'DDR5',
+    'DDR4',
+    'NVMe',
+    'SSD',
+    'M.2',
+    'ATX 3.0',
+    'PSU',
+    'SKU',
+    ...catalogKeywords,
+  ];
+  const uniqueKeywords = Array.from(new Set(domainTerms.map((k) => k.trim()).filter(Boolean))).slice(0, 45);
+  const sessionId = `kinetix-asr-${Date.now().toString(36)}`;
+
+  const requestMeta = JSON.stringify({
+    mode: 'PUSH_TO_TALK',
+    model,
+    audioEncoding: 'WAV',
+    languageBias: ['Spanish', 'English'],
+    keywords: uniqueKeywords,
+  });
+
+  const form = new FormData();
+  form.append('request', new Blob([requestMeta], { type: 'application/json' }));
+  form.append('audio', new Blob([new Uint8Array(wavBuffer)], { type: 'audio/wav' }), 'operator-command.wav');
+
+  const res = await fetch(`${baseUrl}/asr/transcribe?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    signal: signal ?? AbortSignal.timeout(15_000),
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Muse Voice ASR HTTP ${res.status}: ${errText.slice(0, 220)}`);
+  }
+
+  const data = (await res.json()) as {
+    sessionId?: string;
+    transcript?: string;
+    audioDurationMs?: number;
+  };
+
+  return {
+    transcript: (data.transcript || '').trim(),
+    audioDurationMs: Number(data.audioDurationMs ?? 0),
+    latencyMs: Date.now() - started,
+    sessionId: data.sessionId || sessionId,
+    modelUsed: `${model} (Meta Model API)`,
+    biasedKeywordsCount: uniqueKeywords.length,
+  };
+}

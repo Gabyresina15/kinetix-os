@@ -17,6 +17,7 @@ import {
   callBasetenMuseSparkOpen,
   callMuseCodeGenerator,
   callMuseImageStudioSynthesis,
+  callMuseVoiceTranscribe,
   dispatchSupplierClaimNotification,
   STUDIO_RENDER_FALLBACK_URI,
   RAW_WAREHOUSE_CROP_FALLBACK_URI,
@@ -37,6 +38,13 @@ import {
   verifyWasmEscapeBlocked,
   type WasmPricingExecutionResult,
 } from './services/wasmPricingSandbox';
+import {
+  appendAuditBlock,
+  findAuditBlock,
+  getAuditBlocksNewestFirst,
+  resetAuditLedger,
+  verifyAuditChainIntegrity,
+} from './services/auditLedger';
 
 export const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
 app.register(cors, { origin: '*' });
@@ -608,6 +616,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             timestamp: new Date().toISOString(),
           };
           LIVE_STORE_STATE.claims.unshift(claimRecord);
+          appendAuditBlock({
+            type: 'SUPPLIER_CLAIM',
+            skuOrRef: ticketId,
+            summary: `Defect claim -$${resolvedAmount.toFixed(2)} USD (${guardrailStatus}): ${action.defectReason}`,
+            undo: { kind: 'REVOKE_CLAIM', ticketId },
+            metadata: { amountUsd: resolvedAmount, guardrailStatus },
+          });
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             targetMaskId: targetObj?.id || action.targetMaskId,
@@ -663,6 +678,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             newStock: item.stock,
             baseCostUsd: item.baseCostUsd,
             sellPriceUsd: item.sellPriceUsd,
+          });
+          appendAuditBlock({
+            type: 'STOCK_DELTA',
+            skuOrRef: item.sku,
+            summary: `${item.name}: stock ${previousStock} -> ${item.stock} (${action.delta >= 0 ? '+' : ''}${action.delta})`,
+            undo: { kind: 'RESTORE_STOCK', sku: item.sku, previousStock },
+            metadata: { previousStock, newStock: item.stock, delta: action.delta },
           });
 
           sendEvent('TOOL_MUTATED', {
@@ -726,6 +748,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             status: 'PUBLISHED_TO_STORE',
           };
           LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
+          appendAuditBlock({
+            type: 'STUDIO_SYNTH',
+            skuOrRef: catId,
+            summary: `Muse Image (${resolution}): "${action.productTitle}"`,
+            metadata: { resolution, usedLiveApi: usedLive },
+          });
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             targetMaskId: targetObj?.id || action.targetMaskId,
@@ -777,6 +805,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           const repricedSkus: Array<{ sku: string; finalPrice: number }> = [];
 
           for (const item of candidateItems) {
+            const previousPriceUsd = item.sellPriceUsd;
             const vmRes = await executeMuseCodeMarginCalc(
               rawCode,
               item.baseCostUsd,
@@ -803,6 +832,17 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
                 taxApplied: action.taxRatePercent,
                 sandboxEngine: vmRes.sandboxEngine,
                 policyModel: policyModelLabel,
+              });
+              appendAuditBlock({
+                type: 'WASM_REPRICE',
+                skuOrRef: item.sku,
+                summary: `QuickJS WASM (${action.targetMarginPercent}% margin): $${previousPriceUsd.toFixed(2)} -> $${vmRes.finalPrice.toFixed(2)}`,
+                undo: { kind: 'RESTORE_PRICE', sku: item.sku, previousPriceUsd },
+                metadata: {
+                  sandboxEngine: vmRes.sandboxEngine,
+                  invariantsPassed: vmRes.invariantsPassed,
+                  policyModel: policyModelLabel,
+                },
               });
             }
           }
@@ -881,6 +921,13 @@ app.post('/api/confirm-guardrail', async (request, reply) => {
     authorizedAt,
   });
 
+  appendAuditBlock({
+    type: 'GUARDRAIL_AUTHORIZED',
+    skuOrRef: held.id as string,
+    summary: `Operator authorized -$${Number(held.amountUsd).toFixed(2)} USD via ${dispatch.dispatchedVia}`,
+    metadata: { externalReceiptId: dispatch.externalReceiptId, deliveredExternally: dispatch.deliveredExternally },
+  });
+
   return reply.send({ ok: true, claim: held, deliveredExternally: dispatch.deliveredExternally });
 });
 
@@ -933,6 +980,12 @@ app.post('/api/triage/resolve', async (request, reply) => {
       timestamp: new Date().toISOString(),
     };
     LIVE_STORE_STATE.claims.unshift(claimRecord);
+    appendAuditBlock({
+      type: 'SUPERVISOR_TRIAGE',
+      skuOrRef: ticketId,
+      summary: `Supervisor triage claim -$${amountUsd.toFixed(2)} USD on ${cleanSku}`,
+      undo: { kind: 'REVOKE_CLAIM', ticketId },
+    });
     return reply.send({ ok: true, claim: claimRecord, inventory: LIVE_STORE_STATE.inventory });
   }
 
@@ -940,6 +993,7 @@ app.post('/api/triage/resolve', async (request, reply) => {
   const delta = Number(body.delta) > 0 ? Number(body.delta) : 1;
   const triageIdx = LIVE_STORE_STATE.inventory.findIndex((i) => i.sku.startsWith('SKU-TRIAGE-'));
   let targetItem = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
+  const previousStock = targetItem ? targetItem.stock : 0;
 
   if (triageIdx !== -1) {
     const triageItem = LIVE_STORE_STATE.inventory[triageIdx];
@@ -988,14 +1042,143 @@ app.post('/api/triage/resolve', async (request, reply) => {
     baseCostUsd: targetItem.baseCostUsd,
     sellPriceUsd: targetItem.sellPriceUsd,
   });
+  appendAuditBlock({
+    type: 'SUPERVISOR_TRIAGE',
+    skuOrRef: targetItem.sku,
+    summary: `Supervisor triage verified ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock}`,
+    undo: { kind: 'RESTORE_STOCK', sku: targetItem.sku, previousStock },
+  });
 
   return reply.send({ ok: true, item: targetItem, inventory: LIVE_STORE_STATE.inventory });
+});
+
+app.post('/api/voice/transcribe', async (request, reply) => {
+  if (!isAuthorizedRequest(request.headers as Record<string, unknown>)) {
+    return reply.status(401).send({ ok: false, error: 'UNAUTHORIZED_KINETIX_LIVE_TOKEN' });
+  }
+  const body = (request.body as { wavBase64?: string } | undefined) || {};
+  const rawB64 = (body.wavBase64 || '').replace(/^data:audio\/[\w-]+;base64,/, '').trim();
+  if (!rawB64) {
+    return reply.status(400).send({ ok: false, error: 'WAV_BASE64_REQUIRED' });
+  }
+  const wavBuffer = Buffer.from(rawB64, 'base64');
+  if (wavBuffer.length < 44 || wavBuffer.toString('ascii', 0, 4) !== 'RIFF') {
+    return reply.status(400).send({ ok: false, error: 'INVALID_RIFF_WAV_CONTAINER' });
+  }
+
+  const mode = process.env.ORCHESTRATOR_MODE || 'LIVE';
+  if (mode === 'REPLAY' || !process.env.META_MODEL_API_KEY) {
+    return reply.send({
+      ok: true,
+      transcript:
+        'El cooler de torre con tubos de cobre vino con una aleta golpeada, abrí reclamo. Sumá al stock los dos módulos de memoria RAM y el disco SSD M.2. Armame la foto de estudio para la fuente de poder modular y recalculá precios con 32% de margen.',
+      audioDurationMs: Math.round(((wavBuffer.length - 44) / 48000) * 1000),
+      latencyMs: 12,
+      sessionId: 'replay-voice-session',
+      modelUsed: 'muse-voice-transcribe-1.0 [REPLAY]',
+      biasedKeywordsCount: 25,
+    });
+  }
+
+  try {
+    const catalogKeywords: string[] = [];
+    for (const item of LIVE_STORE_STATE.inventory.slice(0, 20)) {
+      const brandAndModel = item.name.split(/\s+/).slice(0, 2).join(' ');
+      if (brandAndModel) catalogKeywords.push(brandAndModel);
+    }
+    const asr = await callMuseVoiceTranscribe(wavBuffer, catalogKeywords);
+    return reply.send({ ok: true, ...asr });
+  } catch (err) {
+    app.log.error({ err: (err as Error).message }, 'Muse Voice Transcribe failed');
+    return reply.status(502).send({ ok: false, error: (err as Error).message });
+  }
+});
+
+app.get('/api/audit-ledger', async (_request, reply) => {
+  return reply.send({
+    ok: true,
+    integrity: verifyAuditChainIntegrity(),
+    blocks: getAuditBlocksNewestFirst(),
+  });
+});
+
+app.post('/api/audit-ledger/undo', async (request, reply) => {
+  const body = (request.body as { txId?: string } | undefined) || {};
+  if (!body.txId) return reply.status(400).send({ ok: false, error: 'TX_ID_REQUIRED' });
+
+  const targetBlock = findAuditBlock(body.txId);
+  if (!targetBlock) return reply.status(404).send({ ok: false, error: 'TX_NOT_FOUND' });
+  if (!targetBlock.reversible || targetBlock.rolledBack) {
+    return reply.status(409).send({ ok: false, error: 'TX_NOT_REVERSIBLE_OR_ALREADY_ROLLED_BACK' });
+  }
+
+  let rollbackSummary = '';
+  if (targetBlock.undo.kind === 'RESTORE_STOCK') {
+    const { sku, previousStock } = targetBlock.undo;
+    const item = LIVE_STORE_STATE.inventory.find((i) => i.sku === sku);
+    if (item) {
+      const beforeRollback = item.stock;
+      item.stock = previousStock;
+      await upsertInventorySnapshot(item);
+      await persistErpMutation('inventory_mutations', {
+        eventType: 'COMPENSATING_UNDO_STOCK',
+        refTxId: targetBlock.txId,
+        sku,
+        previousStock: beforeRollback,
+        newStock: previousStock,
+      });
+      rollbackSummary = `Compensating rollback on ${sku}: stock ${beforeRollback} -> ${previousStock}`;
+    }
+  } else if (targetBlock.undo.kind === 'RESTORE_PRICE') {
+    const { sku, previousPriceUsd } = targetBlock.undo;
+    const item = LIVE_STORE_STATE.inventory.find((i) => i.sku === sku);
+    if (item) {
+      const beforeRollback = item.sellPriceUsd;
+      item.sellPriceUsd = previousPriceUsd;
+      await upsertInventorySnapshot(item);
+      await persistErpMutation('inventory_mutations', {
+        eventType: 'COMPENSATING_UNDO_PRICE',
+        refTxId: targetBlock.txId,
+        sku,
+        previousPriceUsd: beforeRollback,
+        sellPriceUsd: previousPriceUsd,
+      });
+      rollbackSummary = `Compensating rollback on ${sku}: price $${beforeRollback.toFixed(2)} -> $${previousPriceUsd.toFixed(2)}`;
+    }
+  } else if (targetBlock.undo.kind === 'REVOKE_CLAIM') {
+    const { ticketId } = targetBlock.undo;
+    LIVE_STORE_STATE.claims = LIVE_STORE_STATE.claims.filter((c: any) => c.id !== ticketId);
+    try {
+      const db = await getPersistenceDb();
+      await db?.collection('supplier_claims').deleteOne({ ticketId });
+    } catch {
+      // ignore offline mongo
+    }
+    rollbackSummary = `Compensating rollback: revoked supplier claim #${ticketId}`;
+  }
+
+  targetBlock.rolledBack = true;
+  appendAuditBlock({
+    type: 'COMPENSATING_UNDO',
+    skuOrRef: targetBlock.txId,
+    summary: rollbackSummary || `Rolled back ${targetBlock.txId}`,
+    metadata: { targetTxId: targetBlock.txId },
+  });
+
+  return reply.send({
+    ok: true,
+    inventory: LIVE_STORE_STATE.inventory,
+    claims: LIVE_STORE_STATE.claims,
+    integrity: verifyAuditChainIntegrity(),
+    blocks: getAuditBlocksNewestFirst(),
+  });
 });
 
 app.post('/api/reset-demo', async (_request, reply) => {
   LIVE_STORE_STATE.inventory = cloneInitialCatalog();
   LIVE_STORE_STATE.claims = [];
   LIVE_STORE_STATE.catalogDrafts = [];
+  resetAuditLedger();
   try {
     const db = await getPersistenceDb();
     if (db) {
@@ -1018,15 +1201,19 @@ app.get('/api/live-ledger', async (_request, reply) => {
 app.get('/api/health', async (_request, reply) => {
   const db = await getPersistenceDb();
   const wasmProbe = await verifyWasmEscapeBlocked();
+  const audit = verifyAuditChainIntegrity();
   return reply.send({
     ok: true,
     mode: process.env.ORCHESTRATOR_MODE || 'LIVE',
     mongoConnected: Boolean(db),
     basetenConfigured: Boolean(process.env.BASETEN_API_KEY),
     metaApiConfigured: Boolean(process.env.META_MODEL_API_KEY),
+    voiceAsrModel: process.env.META_VOICE_MODEL || 'muse-voice-transcribe-1.0',
     telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
     sandboxEngine: 'quickjs-wasm',
     sandboxIsolated: wasmProbe.isolated,
+    auditChainValid: audit.valid,
+    auditBlockCount: audit.blockCount,
     skuCount: LIVE_STORE_STATE.inventory.length,
   });
 });
