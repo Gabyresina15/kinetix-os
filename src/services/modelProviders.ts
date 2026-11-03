@@ -5,21 +5,18 @@ export const RAW_WAREHOUSE_CROP_FALLBACK_URI =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
-  <rect width="400" height="400" fill="#18181b"/>
-  <rect y="270" width="400" height="130" fill="#27272a"/>
-  <line x1="0" y1="270" x2="400" y2="270" stroke="#3f3f46" stroke-width="3"/>
-  <ellipse cx="215" cy="325" rx="95" ry="18" fill="#09090b" opacity="0.75"/>
-  <g transform="rotate(-2 200 210)">
-    <rect x="130" y="110" width="140" height="200" rx="14" fill="#1e293b" stroke="#475569" stroke-width="2"/>
-    <rect x="138" y="84" width="124" height="28" rx="4" fill="#0f172a" stroke="#334155" stroke-width="2"/>
-    <rect x="132" y="155" width="136" height="105" fill="#0f172a"/>
-    <text x="200" y="185" fill="#94a3b8" font-family="monospace" font-size="11" font-weight="bold" text-anchor="middle">TITAN LABS</text>
-    <text x="200" y="212" fill="#cbd5e1" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">CREATINE</text>
-    <text x="200" y="232" fill="#64748b" font-family="monospace" font-size="9" text-anchor="middle">500G RAW LOT</text>
-  </g>
-  <rect x="115" y="72" width="170" height="252" rx="8" fill="#00f0ff" fill-opacity="0.12" stroke="#22d3ee" stroke-width="2.5" stroke-dasharray="8 4"/>
-  <rect x="115" y="72" width="115" height="22" fill="#083344"/>
-  <text x="172" y="87" fill="#67e8f9" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">SAM_MASK</text>
+  <rect width="400" height="400" fill="#0b0f17"/>
+  <rect y="275" width="400" height="125" fill="#161d2a"/>
+  <line x1="0" y1="275" x2="400" y2="275" stroke="#334155" stroke-width="2"/>
+  <rect x="95" y="120" width="210" height="145" rx="8" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <circle cx="165" cy="192" r="46" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+  <circle cx="165" cy="192" r="16" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+  <rect x="230" y="148" width="55" height="14" rx="2" fill="#0f172a"/>
+  <rect x="230" y="170" width="55" height="14" rx="2" fill="#0f172a"/>
+  <rect x="230" y="192" width="55" height="14" rx="2" fill="#0f172a"/>
+  <rect x="82" y="106" width="236" height="172" rx="6" fill="#22d3ee" fill-opacity="0.08" stroke="#22d3ee" stroke-width="2" stroke-dasharray="8 4"/>
+  <rect x="82" y="106" width="142" height="20" fill="#083344"/>
+  <text x="153" y="120" fill="#67e8f9" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">FALLBACK_CROP</text>
 </svg>`);
 
 export interface SparkInferenceResult {
@@ -34,34 +31,21 @@ export const STUDIO_RENDER_FALLBACK_URI =
   encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
   <defs>
-    <radialGradient id="bgGlow" cx="50%" cy="60%" r="60%">
-      <stop offset="0%" stop-color="#083344" stop-opacity="0.9"/>
-      <stop offset="60%" stop-color="#090D16" stop-opacity="1"/>
+    <radialGradient id="bgGlow" cx="50%" cy="55%" r="60%">
+      <stop offset="0%" stop-color="#083344" stop-opacity="0.85"/>
+      <stop offset="65%" stop-color="#090D16" stop-opacity="1"/>
       <stop offset="100%" stop-color="#030508" stop-opacity="1"/>
     </radialGradient>
-    <linearGradient id="tubBody" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.85"/>
-      <stop offset="6%" stop-color="#0f172a"/>
-      <stop offset="50%" stop-color="#1e293b"/>
-      <stop offset="94%" stop-color="#090d16"/>
-      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.7"/>
-    </linearGradient>
-    <linearGradient id="podium" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="100%" stop-color="#020617"/>
-    </linearGradient>
   </defs>
   <rect width="400" height="400" fill="url(#bgGlow)"/>
-  <ellipse cx="200" cy="330" rx="145" ry="22" fill="#00f0ff" opacity="0.18"/>
-  <ellipse cx="200" cy="326" rx="135" ry="18" fill="url(#podium)" stroke="#334155" stroke-width="2"/>
-  <rect x="125" y="105" width="150" height="210" rx="18" fill="url(#tubBody)" stroke="#38bdf8" stroke-width="1.5"/>
-  <rect x="132" y="78" width="136" height="30" rx="6" fill="#090D16" stroke="#475569" stroke-width="1.5"/>
-  <rect x="127" y="150" width="146" height="115" fill="#05070B" stroke="#00f0ff" stroke-width="1" opacity="0.95"/>
-  <text x="200" y="178" fill="#22d3ee" font-family="monospace" font-size="13" font-weight="bold" text-anchor="middle" letter-spacing="3">TITAN LABS</text>
-  <text x="200" y="206" fill="#ffffff" font-family="sans-serif" font-size="18" font-weight="900" text-anchor="middle" letter-spacing="1">CREATINE</text>
-  <text x="200" y="226" fill="#94a3b8" font-family="monospace" font-size="10" text-anchor="middle">MICRONIZED // 500G</text>
-  <rect x="160" y="238" width="80" height="16" rx="3" fill="#083344" stroke="#22d3ee" stroke-width="0.8"/>
-  <text x="200" y="249" fill="#67e8f9" font-family="monospace" font-size="8" font-weight="bold" text-anchor="middle">BLACK SERIES</text>
+  <ellipse cx="200" cy="322" rx="140" ry="18" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+  <rect x="95" y="135" width="210" height="150" rx="10" fill="#111827" stroke="#38bdf8" stroke-width="1.5"/>
+  <circle cx="165" cy="210" r="48" fill="#05070B" stroke="#22d3ee" stroke-width="1.2"/>
+  <circle cx="165" cy="210" r="18" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+  <text x="255" y="195" fill="#22d3ee" font-family="monospace" font-size="11" font-weight="bold" text-anchor="middle">ATX PSU</text>
+  <text x="255" y="214" fill="#94a3b8" font-family="monospace" font-size="9" text-anchor="middle">MODULAR UNIT</text>
+  <rect x="220" y="228" width="70" height="16" rx="3" fill="#083344" stroke="#22d3ee" stroke-width="0.8"/>
+  <text x="255" y="239" fill="#67e8f9" font-family="monospace" font-size="8" font-weight="bold" text-anchor="middle">SVG FALLBACK</text>
 </svg>`);
 
 export function extractSparkReasoningAndJson(messageObj: any): {
@@ -252,7 +236,8 @@ export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
   frameBase64?: string | null,
-  onDetectedObjects?: (objects: DetectedObjectDraft[]) => void
+  onDetectedObjects?: (objects: DetectedObjectDraft[]) => void,
+  signal?: AbortSignal
 ): Promise<SparkInferenceResult> {
   const apiKey = process.env.BASETEN_API_KEY;
   const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
@@ -282,6 +267,7 @@ export async function callBasetenMuseSparkOpen(
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
+    signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -289,7 +275,7 @@ export async function callBasetenMuseSparkOpen(
     body: JSON.stringify({
       model,
       temperature: 0.1,
-      max_tokens: 8000,
+      max_tokens: 4096,
       stream: true,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -361,21 +347,27 @@ export async function callBasetenMuseSparkOpen(
   };
 }
 
-export async function callMuseImageStudioSynthesis(prompt: string): Promise<{
+export async function callMuseImageStudioSynthesis(
+  prompt: string,
+  signal?: AbortSignal
+): Promise<{
   imageUrl: string;
   usedLiveApi: boolean;
+  resolution: string;
 }> {
   const apiKey = process.env.META_MODEL_API_KEY;
   const baseUrl = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
   const model = process.env.META_IMAGE_MODEL || 'muse-image-1.0';
+  const requestedSize = process.env.META_IMAGE_SIZE || '1024x1024';
 
   if (!apiKey) {
-    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false };
+    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false, resolution: 'SVG_FALLBACK' };
   }
 
-  try {
+  const trySize = async (size: string) => {
     const response = await fetch(`${baseUrl}/images/generations`, {
       method: 'POST',
+      signal,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -384,30 +376,36 @@ export async function callMuseImageStudioSynthesis(prompt: string): Promise<{
         model,
         prompt,
         n: 1,
-        size: '512x512',
+        size,
         response_format: 'b64_json',
       }),
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.warn(`[Muse Image] HTTP ${response.status}: ${errText.slice(0, 300)}`);
-      return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false };
+      console.warn(`[Muse Image] HTTP ${response.status} (size=${size}): ${errText.slice(0, 300)}`);
+      return null;
     }
 
     const data = (await response.json()) as any;
-    console.log('[Muse Image] response keys:', Object.keys(data));
-    console.log('[Muse Image] data[0] keys:', Object.keys(data.data?.[0] || {}));
     const b64 = data.data?.[0]?.b64_json;
     const url = data.data?.[0]?.url;
-    console.log('[Muse Image] has b64:', Boolean(b64), 'has url:', Boolean(url));
+    if (b64) return { imageUrl: `data:image/png;base64,${b64}`, usedLiveApi: true, resolution: size };
+    if (url) return { imageUrl: url, usedLiveApi: true, resolution: size };
+    return null;
+  };
 
-    if (b64) return { imageUrl: `data:image/png;base64,${b64}`, usedLiveApi: true };
-    if (url) return { imageUrl: url, usedLiveApi: true };
-    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false };
+  try {
+    const primary = await trySize(requestedSize);
+    if (primary) return primary;
+    if (requestedSize !== '512x512') {
+      const secondary = await trySize('512x512');
+      if (secondary) return secondary;
+    }
+    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false, resolution: 'SVG_FALLBACK' };
   } catch (err) {
-    console.warn('[Muse Image] failed', (err as Error).message);
-    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false };
+    console.warn('[Muse Image] failed:', (err as Error).message);
+    return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false, resolution: 'SVG_FALLBACK' };
   }
 }
 
@@ -723,21 +721,28 @@ export async function callMuseCodeGenerator(
   return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
+function escapeTelegramHtml(text: string): string {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export async function dispatchSupplierClaimNotification(claim: {
   id: string;
   mongoId?: string;
   reason: string;
   amountUsd: number;
   cropBase64?: string;
-}): Promise<{ dispatchedVia: string; externalReceiptId: string }> {
+}): Promise<{ dispatchedVia: string; externalReceiptId: string; deliveredExternally: boolean }> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   const caption =
-    `🚨 *KINETIX OS — ZERO-TRUST CLAIM DISPATCHED*\n` +
-    `• *Ticket:* \`#${claim.id}\`\n` +
-    `• *MongoDB Tx:* \`${claim.mongoId || 'local'}\`\n` +
-    `• *Debit Amount:* *-$${claim.amountUsd.toFixed(2)} USD*\n` +
-    `• *Spatial Defect:* ${claim.reason}`;
+    `<b>KINETIX OS — GUARDRAIL CLAIM AUTHORIZED</b>\n` +
+    `• <b>Ticket:</b> <code>#${escapeTelegramHtml(claim.id)}</code>\n` +
+    `• <b>Ledger Tx:</b> <code>${escapeTelegramHtml(claim.mongoId || 'local')}</code>\n` +
+    `• <b>Debit Amount:</b> <b>-$${claim.amountUsd.toFixed(2)} USD</b>\n` +
+    `• <b>Spatial Defect:</b> ${escapeTelegramHtml(claim.reason)}`;
 
   if (botToken && chatId) {
     try {
@@ -748,10 +753,11 @@ export async function dispatchSupplierClaimNotification(claim: {
         form.append('chat_id', chatId);
         form.append('photo', imgBlob, `defect-${claim.id}.jpg`);
         form.append('caption', caption);
-        form.append('parse_mode', 'Markdown');
+        form.append('parse_mode', 'HTML');
 
         const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
           method: 'POST',
+          signal: AbortSignal.timeout(8000),
           body: form,
         });
         if (tgRes.ok) {
@@ -759,17 +765,21 @@ export async function dispatchSupplierClaimNotification(claim: {
           return {
             dispatchedVia: 'TELEGRAM_LIVE_PHOTO_WEBHOOK',
             externalReceiptId: `TG-MSG-${tgJson.result?.message_id || Date.now()}`,
+            deliveredExternally: true,
           };
         }
+        const errBody = await tgRes.text();
+        console.warn(`[Telegram sendPhoto] HTTP ${tgRes.status}: ${errBody.slice(0, 240)}`);
       }
 
       const tgTextRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
+        signal: AbortSignal.timeout(8000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
           text: caption,
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
         }),
       });
       if (tgTextRes.ok) {
@@ -777,15 +787,19 @@ export async function dispatchSupplierClaimNotification(claim: {
         return {
           dispatchedVia: 'TELEGRAM_LIVE_WEBHOOK',
           externalReceiptId: `TG-MSG-${tgJson.result?.message_id || Date.now()}`,
+          deliveredExternally: true,
         };
       }
+      const errBody = await tgTextRes.text();
+      console.warn(`[Telegram sendMessage] HTTP ${tgTextRes.status}: ${errBody.slice(0, 240)}`);
     } catch (err) {
-      console.warn('Telegram webhook fallback:', (err as Error).message);
+      console.warn('Telegram webhook failed, recording in local ledger:', (err as Error).message);
     }
   }
 
   return {
-    dispatchedVia: 'LOCAL_LEDGER',
+    dispatchedVia: 'LOCAL_LEDGER_ONLY',
     externalReceiptId: `LEDGER-${Date.now().toString(36).toUpperCase()}`,
+    deliveredExternally: false,
   };
 }

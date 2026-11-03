@@ -1,67 +1,121 @@
 import { NormalizedSpatialObject, RawSamMask } from './spatialNormalizer';
 import { OrchestrationPlan } from '../contracts/orchestratorCore';
+import { CatalogSeedItem } from '../data/catalogSeed';
 import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+let mongoClient: any = null;
 let persistenceDb: any = null;
 let mongoUnavailableUntil = 0;
 
+export function resolveMongoDbName(uri: string): string {
+  try {
+    const parsed = new URL(uri);
+    const pathname = parsed.pathname.replace(/^\/+/, '').split('/')[0]?.trim();
+    return pathname || 'kinetix_erp';
+  } catch {
+    return 'kinetix_erp';
+  }
+}
+
 export async function getPersistenceDb(): Promise<any> {
-  if (persistenceDb) return persistenceDb;
+  if (persistenceDb) {
+    try {
+      await persistenceDb.command({ ping: 1 });
+      return persistenceDb;
+    } catch {
+      persistenceDb = null;
+      try {
+        await mongoClient?.close();
+      } catch {
+        // ignore close errors on dead socket
+      }
+      mongoClient = null;
+    }
+  }
   if (Date.now() < mongoUnavailableUntil) return null;
   try {
     const { MongoClient } = await import('mongodb');
-    // Usamos el MONGO_URI configurado en el .env
     const uri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/kinetix_erp';
     const client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
     await client.connect();
-    // Extraemos el nombre de la base de datos de la URI o usamos fallback
-    const dbName = uri.split('/').pop()?.split('?')[0] || 'kinetix_erp';
+    const dbName = resolveMongoDbName(uri);
+    mongoClient = client;
     persistenceDb = client.db(dbName);
-    console.log(`[MongoDB] ✅ Connected directly to ${dbName}`);
+    console.log(`[MongoDB] Connected to ${dbName}`);
     return persistenceDb;
   } catch (err) {
-    console.warn(`[MongoDB] ⚠️ Connection failed, falling back to local files. Error: ${(err as Error).message}`);
+    console.warn(`[MongoDB] Connection unavailable, using local ledger fallback: ${(err as Error).message}`);
     mongoUnavailableUntil = Date.now() + 30_000;
     return null;
   }
 }
 
-export async function persistErpMutation(collection: string, doc: any): Promise<{ mongoId: string }> {
+export async function upsertInventorySnapshot(item: CatalogSeedItem): Promise<void> {
+  try {
+    const db = await getPersistenceDb();
+    if (!db) return;
+    await db.collection('inventory_catalog').updateOne(
+      { sku: item.sku },
+      {
+        $set: {
+          sku: item.sku,
+          name: item.name,
+          stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : 0,
+          standardInboundLot: Number.isFinite(Number(item.standardInboundLot)) ? Number(item.standardInboundLot) : 1,
+          baseCostUsd: Number.isFinite(Number(item.baseCostUsd)) ? Number(item.baseCostUsd) : 95.0,
+          sellPriceUsd: Number.isFinite(Number(item.sellPriceUsd)) ? Number(item.sellPriceUsd) : 149.0,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  } catch (err) {
+    console.warn(`[MongoDB] inventory_catalog upsert failed for ${item.sku}: ${(err as Error).message}`);
+  }
+}
+
+export async function persistErpMutation(
+  collection: string,
+  doc: Record<string, unknown>
+): Promise<{ mongoId: string; persistedTo: 'mongodb' | 'local_file' }> {
   try {
     const db = await getPersistenceDb();
     if (db) {
-      if (collection === 'inventory_mutations') {
-        const catalogDoc = {
-          sku: doc.sku,
-          name: doc.name || doc.sku,
-          stock: doc.newStock,
-          baseCostUsd: doc.baseCostUsd || 95.0,
-          sellPriceUsd: doc.sellPriceUsd || doc.newPrice || 158.0
-        };
-        // Update Catalog explicitly
-        await db.collection('inventory_catalog').updateOne(
-          { sku: doc.sku },
-          { $set: catalogDoc },
-          { upsert: true }
-        );
-      }
-
       const result = await db.collection(collection).insertOne({ ...doc, createdAt: new Date() });
-      return { mongoId: result.insertedId.toString() };
+      return { mongoId: result.insertedId.toString(), persistedTo: 'mongodb' };
     }
-  } catch {}
+  } catch (err) {
+    console.warn(`[MongoDB] insertOne(${collection}) failed, writing local ledger: ${(err as Error).message}`);
+  }
 
-  // Fallback a archivos si MongoDB explota
   const ledgerDir = path.join(process.cwd(), 'data', 'ledger');
   await fs.mkdir(ledgerDir, { recursive: true });
-  const id = `LEDGER-${Date.now().toString(36).toUpperCase()}`;
+  const id = `LEDGER-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
   await fs.writeFile(
     path.join(ledgerDir, `${id}.json`),
     JSON.stringify({ id, collection, ...doc, createdAt: new Date().toISOString() }, null, 2)
   );
-  return { mongoId: id };
+  return { mongoId: id, persistedTo: 'local_file' };
+}
+
+export async function updateClaimAuthorizationInDb(
+  ticketId: string,
+  patch: {
+    guardrailStatus: string;
+    dispatchChannel: string;
+    externalReceiptId: string;
+    authorizedAt: string;
+  }
+): Promise<void> {
+  try {
+    const db = await getPersistenceDb();
+    if (!db) return;
+    await db.collection('supplier_claims').updateOne({ ticketId }, { $set: patch });
+  } catch (err) {
+    console.warn(`[MongoDB] updateClaimAuthorizationInDb(${ticketId}) failed: ${(err as Error).message}`);
+  }
 }
 
 export async function extractRealCropsFromFrame(
@@ -92,7 +146,7 @@ export async function extractRealCropsFromFrame(
         if (width < 10 || height < 10) return mask;
 
         try {
-          const cropBuffer = await image.clone().extract({ left, top, width, height }).jpeg({ quality: 80 }).toBuffer();
+          const cropBuffer = await image.clone().extract({ left, top, width, height }).jpeg({ quality: 82 }).toBuffer();
           return { ...mask, cropBase64: `data:image/jpeg;base64,${cropBuffer.toString('base64')}` };
         } catch {
           return mask;
@@ -123,7 +177,7 @@ export function sanitizeReasoningToTelemetry(
   const lines: string[] = [];
 
   lines.push(
-    `[SCENE_GRAPH] Indexed ${actionable.length} physical object(s), ${piiCount} PII shield(s)` +
+    `[SCENE_GRAPH] Indexed ${actionable.length} physical object(s), ${piiCount} PII-gated region(s)` +
       (actionable.length
         ? `: ${actionable.map((o) => `${o.label} ${fmtBbox(o.bbox)}`).join(' | ')}.`
         : '.')
@@ -140,7 +194,7 @@ export function sanitizeReasoningToTelemetry(
         const amount = Number(a.claimAmountUsd);
         const held = amount >= 50;
         lines.push(
-          `[GUARDRAIL_AUDIT] Claim -$${amount.toFixed(2)} USD -> ${held ? 'HELD_BY_ZERO_TRUST_GUARDRAIL (exceeds $50.00 USD auto-limit)' : 'AUTO_APPROVED (< $50.00 USD)'}.`
+          `[GUARDRAIL_AUDIT] Claim -$${amount.toFixed(2)} USD -> ${held ? 'HELD_BY_GUARDRAIL (>= $50.00 USD operator approval required)' : 'AUTO_APPROVED (< $50.00 USD)'}.`
         );
         break;
       }
@@ -165,7 +219,7 @@ export function sanitizeReasoningToTelemetry(
       }
       case 'recalculate_margins_vm':
         lines.push(
-          `[SEMANTIC_BINDING] Global -> recalculate_margins_vm: margin ${a.targetMarginPercent}% + tax ${a.taxRatePercent}%.`
+          `[SEMANTIC_BINDING] Batch repricing -> recalculate_margins_vm: margin ${a.targetMarginPercent}% + tax ${a.taxRatePercent}%.`
         );
         break;
     }
@@ -177,7 +231,7 @@ export function sanitizeReasoningToTelemetry(
 
   const trace = (rawReasoning || '').replace(/\s+/g, ' ').trim();
   if (trace) {
-    lines.push(`[SPARK_TRACE] ${trace.slice(0, 280)}${trace.length > 280 ? '...' : ''}`);
+    lines.push(`[SPARK_TRACE] ${trace.slice(0, 600)}${trace.length > 600 ? '...' : ''}`);
   }
 
   return lines.join('\n');

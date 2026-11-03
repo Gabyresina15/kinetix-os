@@ -32,11 +32,11 @@ export type VisualDna = z.infer<typeof VisualDnaSchema>;
 
 export function compileMuseImagePromptFromDna(dna: VisualDna): string {
   return [
-    `Commercial 8k studio product photography of a ${dna.containerGeometry}.`,
+    `Commercial studio product photography of a ${dna.containerGeometry}.`,
     `Exact color palette: ${dna.exactColorPalette}.`,
     `Surface & material: ${dna.surfaceMaterial}.`,
     `Visible markings/details: "${dna.detectedBrandOrText}".`,
-    `Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, ultra-crisp studio hardware hero shot.`,
+    `Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, crisp studio hardware hero shot.`,
   ].join(' ');
 }
 

@@ -28,45 +28,70 @@ import {
   persistErpMutation,
   sanitizeReasoningToTelemetry,
   getPersistenceDb,
+  upsertInventorySnapshot,
+  updateClaimAuthorizationInDb,
 } from './services/spatialCropperAndDb';
+import { CatalogSeedItem, cloneInitialCatalog, INITIAL_CATALOG } from './data/catalogSeed';
 
 const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
 app.register(cors, { origin: '*' });
 
 export const LIVE_STORE_STATE = {
-  inventory: [] as any[],
+  inventory: cloneInitialCatalog() as CatalogSeedItem[],
   claims: [] as Record<string, unknown>[],
   catalogDrafts: [] as Record<string, unknown>[],
 };
 
-// Rutina de sincronización inicial con MongoDB
-async function syncStoreStateFromMongo() {
+const SEED_BY_SKU = new Map(INITIAL_CATALOG.map((item) => [item.sku, item]));
+
+function sanitizeCatalogRecord(doc: Record<string, any>): CatalogSeedItem | null {
+  const sku = typeof doc.sku === 'string' && doc.sku.trim() ? doc.sku.trim() : null;
+  if (!sku) return null;
+  const seed = SEED_BY_SKU.get(sku);
+  const rawName = typeof doc.name === 'string' ? doc.name.trim() : '';
+  const name = rawName && rawName !== sku ? rawName : seed?.name || sku;
+  const stockNum = Number(doc.stock ?? doc.newStock);
+  const stock = Number.isFinite(stockNum) && stockNum >= 0 ? stockNum : seed?.stock ?? 0;
+  const lotNum = Number(doc.standardInboundLot);
+  const standardInboundLot = Number.isFinite(lotNum) && lotNum > 0 ? lotNum : seed?.standardInboundLot ?? 1;
+  const baseNum = Number(doc.baseCostUsd);
+  const baseCostUsd = Number.isFinite(baseNum) && baseNum > 0 ? baseNum : seed?.baseCostUsd ?? 95.0;
+  const sellNum = Number(doc.sellPriceUsd);
+  const sellPriceUsd =
+    Number.isFinite(sellNum) && sellNum > 0 && !(seed && sellNum === 158 && seed.sellPriceUsd !== 158)
+      ? sellNum
+      : seed?.sellPriceUsd ?? Number((baseCostUsd * 1.45).toFixed(2));
+
+  return { sku, name, stock, standardInboundLot, baseCostUsd, sellPriceUsd };
+}
+
+async function syncStoreStateFromMongo(): Promise<void> {
   try {
     const db = await getPersistenceDb();
-    if (!db) return;
-
-    // Sincronizar Inventario
-    const inventoryItems = await db.collection('inventory_mutations').find().sort({ createdAt: -1 }).toArray();
-    const latestStocks = new Map();
-    for (const item of inventoryItems) {
-      if (!latestStocks.has(item.sku)) {
-        latestStocks.set(item.sku, item);
+    if (!db) {
+      if (LIVE_STORE_STATE.inventory.length === 0) {
+        LIVE_STORE_STATE.inventory = cloneInitialCatalog();
       }
-    }
-    if (latestStocks.size > 0) {
-      // Reconstruir el estado de inventario basado en los últimos registros de MongoDB
-      const mergedInventory = Array.from(latestStocks.values()).map(doc => ({
-        sku: doc.sku,
-        name: doc.name || doc.sku,
-        stock: doc.newStock,
-        standardInboundLot: doc.delta || 1,
-        baseCostUsd: doc.baseCostUsd || 95.0,
-        sellPriceUsd: doc.sellPriceUsd || 158.0,
-      }));
-      LIVE_STORE_STATE.inventory = mergedInventory;
+      return;
     }
 
-    // Cargar últimos claims (tickets de soporte)
+    const catalogDocs = await db.collection('inventory_catalog').find().toArray();
+    const bySku = new Map<string, CatalogSeedItem>();
+
+    for (const seed of INITIAL_CATALOG) {
+      bySku.set(seed.sku, { ...seed });
+    }
+    for (const doc of catalogDocs) {
+      const clean = sanitizeCatalogRecord(doc);
+      if (clean) bySku.set(clean.sku, clean);
+    }
+
+    LIVE_STORE_STATE.inventory = Array.from(bySku.values());
+
+    if (catalogDocs.length < INITIAL_CATALOG.length) {
+      await Promise.all(LIVE_STORE_STATE.inventory.map((item) => upsertInventorySnapshot(item)));
+    }
+
     const recentClaims = await db.collection('supplier_claims').find().sort({ createdAt: -1 }).limit(10).toArray();
     if (recentClaims.length > 0) {
       LIVE_STORE_STATE.claims = recentClaims.map((c: any) => ({
@@ -77,18 +102,24 @@ async function syncStoreStateFromMongo() {
         reason: c.reason,
         amountUsd: c.amountUsd,
         thresholdUsd: c.thresholdUsd,
-        guardrailStatus: c.amountUsd >= 50 ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED',
+        dispatchChannel: c.dispatchChannel,
+        externalReceiptId: c.externalReceiptId,
+        guardrailStatus:
+          c.guardrailStatus ||
+          (c.amountUsd >= 50 ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED'),
       }));
     }
 
-    console.log('[Kinetix] 🟢 Memory State synced successfully from MongoDB.');
+    console.log(`[Kinetix] Memory state synced (${LIVE_STORE_STATE.inventory.length} SKUs).`);
   } catch (error) {
-    console.error('[Kinetix] ⚠️ Failed to sync with MongoDB at startup', error);
+    console.error('[Kinetix] Failed to sync with MongoDB at startup, using in-memory catalog:', error);
+    if (LIVE_STORE_STATE.inventory.length === 0) {
+      LIVE_STORE_STATE.inventory = cloneInitialCatalog();
+    }
   }
 }
 
-// Ejecutar sincronización al arrancar
-syncStoreStateFromMongo();
+void syncStoreStateFromMongo();
 
 const ZERO_TRUST_LIMIT_USD = 50;
 
@@ -126,11 +157,11 @@ function findBestInventoryMatch<T extends { sku: string; name: string }>(
   inventory: T[],
   hint: { sku?: string; itemName?: string; label?: string }
 ): T | undefined {
-  const normalize = (str: string) => str.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  const normalize = (str: string) => str.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
   const hintTokens = new Set([
     ...normalize(hint.sku || ''),
     ...normalize(hint.itemName || ''),
-    ...normalize(hint.label || '')
+    ...normalize(hint.label || ''),
   ]);
 
   if (hintTokens.size === 0) return undefined;
@@ -140,7 +171,7 @@ function findBestInventoryMatch<T extends { sku: string; name: string }>(
 
   for (const item of inventory) {
     const itemTokens = normalize(`${item.sku} ${item.name}`);
-    const score = itemTokens.filter(token => hintTokens.has(token)).length;
+    const score = itemTokens.filter((token) => hintTokens.has(token)).length;
     if (score > highestScore) {
       highestScore = score;
       bestMatch = item;
@@ -161,14 +192,21 @@ function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
   }));
 }
 
+const TOOL_TIMEOUT_MS: Record<string, number> = {
+  quarantine_and_claim: 12_000,
+  mutate_inventory: 10_000,
+  recalculate_margins_vm: 10_000,
+  generate_studio_catalog: 30_000,
+};
+
 app.post('/api/orchestrate-stream', async (request, reply) => {
-  const body = (request.body as { frameBase64?: string | null; voiceTranscript?: string; resetBeforeRun?: boolean }) || {};
+  const body =
+    (request.body as { frameBase64?: string | null; voiceTranscript?: string; resetBeforeRun?: boolean }) || {};
   const voiceTranscript =
     body.voiceTranscript ||
     'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock las memorias RAM y armá foto de estudio para la fuente modular.';
 
   if (body.resetBeforeRun !== false) {
-    // Si reseteamos al principio de un run, limpiamos basuras
     LIVE_STORE_STATE.claims = [];
     LIVE_STORE_STATE.catalogDrafts = [];
   }
@@ -181,7 +219,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     'X-Accel-Buffering': 'no',
   });
 
+  let streamClosed = false;
+  request.raw.on('close', () => {
+    streamClosed = true;
+  });
+
   const sendEvent = (event: string, payload: unknown) => {
+    if (streamClosed || reply.raw.writableEnded) return;
     reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
   };
 
@@ -189,6 +233,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   sendEvent('VISION_SCAN_STARTED', {
     model: 'meta-models/muse-spark-open-1026 (Baseten)',
     status: 'SCANNING_2D_SCENE_AND_PLANNING_DAG',
+    timestamp: startedAt,
   });
 
   try {
@@ -198,41 +243,68 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
     let activePlan: OrchestrationPlan = GOLDEN_FALLBACK_PLAN;
     let rawReasoning = '';
-    let sparkLatencyMs = 440;
+    let sparkLatencyMs = 0;
     let sparkModelLabel = 'meta-models/muse-spark-open-1026 (Baseten)';
     let spatialLocked = false;
     let lockedRawMasks: RawSamMask[] = FALLBACK_SAM_MASKS;
+    let usedFallbackPlan = false;
 
-    const emitSpatialLock = (objects: DetectedObjectDraft[]) => {
+    const emitEarlyObjects = (objects: DetectedObjectDraft[]) => {
       if (spatialLocked || !objects.length) return;
       spatialLocked = true;
       lockedRawMasks = draftsToRawMasks(objects);
+      const earlyNormalized = normalizeSpatialScene(lockedRawMasks);
+      sendEvent('SPATIAL_LOCK', {
+        model: 'Muse Spark Open (early stream)',
+        latencyMs: Date.now() - startedAt,
+        sparkLatencyMs: Date.now() - startedAt,
+        samUsed: false,
+        samLatencyMs: 0,
+        samRefined: 0,
+        preliminary: true,
+        objects: earlyNormalized,
+      });
     };
 
-    if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
+    const fixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'last-baseten-spark-run.json');
+
+    if (mode === 'REPLAY') {
+      try {
+        const rawFixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
+        if (rawFixture?.liveSpark?.plan) {
+          activePlan = rawFixture.liveSpark.plan;
+          rawReasoning = rawFixture.liveSpark.reasoningTrace || 'Loaded from recorded golden-path fixture.';
+          sparkLatencyMs = Number(rawFixture.liveSpark.latencyMs) || 0;
+          sparkModelLabel = `${rawFixture.liveSpark.modelUsed || 'muse-spark-open-1026'} [REPLAY]`;
+        }
+      } catch (replayErr) {
+        usedFallbackPlan = true;
+        sparkModelLabel = 'golden-fallback-plan [REPLAY_NO_FIXTURE]';
+        app.log.warn(`REPLAY fixture missing, using fallback plan: ${(replayErr as Error).message}`);
+      }
+    } else if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
+      const sparkAbort = new AbortController();
+      const sparkTimer = setTimeout(() => sparkAbort.abort(new Error('Baseten timeout > 45000ms')), 45_000);
+      request.raw.on('close', () => sparkAbort.abort(new Error('Client closed SSE stream')));
+
       try {
         console.log('[LIVE] Calling Baseten | image:', Boolean(body.frameBase64), '| chars:', body.frameBase64?.length || 0);
-        const liveSpark = await Promise.race([
-          callBasetenMuseSparkOpen(
-            systemPrompt,
-            voiceTranscript,
-            body.frameBase64,
-            (drafts) => emitSpatialLock(drafts)
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Baseten timeout > 45000ms')), 45000)
-          ),
-        ]);
+        const liveSpark = await callBasetenMuseSparkOpen(
+          systemPrompt,
+          voiceTranscript,
+          body.frameBase64,
+          (drafts) => emitEarlyObjects(drafts),
+          sparkAbort.signal
+        );
         console.log('[DETECTED]', liveSpark.plan.detectedObjects?.length || 0);
         activePlan = liveSpark.plan;
         rawReasoning = liveSpark.reasoningTrace;
         sparkLatencyMs = liveSpark.latencyMs;
         sparkModelLabel = liveSpark.modelUsed;
 
-        const fixtureDir = path.join(process.cwd(), 'fixtures', 'golden-path');
-        await fs.mkdir(fixtureDir, { recursive: true });
+        await fs.mkdir(path.dirname(fixturePath), { recursive: true });
         await fs.writeFile(
-          path.join(fixtureDir, 'last-baseten-spark-run.json'),
+          fixturePath,
           JSON.stringify({ timestamp: new Date().toISOString(), liveSpark }, null, 2)
         );
       } catch (liveErr) {
@@ -242,10 +314,18 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         sparkLatencyMs = Date.now() - startedAt;
         if (spatialLocked && lockedRawMasks.length) {
           activePlan = planFromLiveObjects(lockedRawMasks, voiceTranscript);
-          rawReasoning = `Live plan could not be validated (${message}). Tools were bound to the objects already detected.`;
+          rawReasoning = `Live plan could not be validated (${message}). Tools were rebound to the objects already detected.`;
           sparkModelLabel = 'muse-spark-open-1026 (partial, tools rebound)';
+        } else {
+          usedFallbackPlan = true;
+          sparkModelLabel = 'fallback-plan (Baseten unavailable)';
         }
+      } finally {
+        clearTimeout(sparkTimer);
       }
+    } else {
+      usedFallbackPlan = true;
+      sparkModelLabel = 'fallback-plan (no BASETEN_API_KEY)';
     }
 
     const seenSkuIndex = new Map<string, number>();
@@ -255,19 +335,27 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         dedupedActions.push(act);
         continue;
       }
-      const matched =
-        LIVE_STORE_STATE.inventory.find((i) => i.sku === act.sku) ||
-        findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: act.sku, itemName: act.itemName });
+      const isExplicitTriage = act.sku.startsWith('SKU-TRIAGE-');
+      const matched = isExplicitTriage
+        ? undefined
+        : LIVE_STORE_STATE.inventory.find((i) => i.sku === act.sku) ||
+          findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: act.sku, itemName: act.itemName });
       const skuKey = matched?.sku || act.sku;
       const prevIdx = seenSkuIndex.get(skuKey);
       if (prevIdx === undefined) {
         seenSkuIndex.set(skuKey, dedupedActions.length);
-        dedupedActions.push(matched ? { ...act, sku: matched.sku, itemName: matched.name } : act);
+        dedupedActions.push(
+          matched
+            ? { ...act, sku: matched.sku, itemName: matched.name, unitCostUsd: matched.baseCostUsd }
+            : act
+        );
         continue;
       }
       const prev = dedupedActions[prevIdx];
       if (prev.tool === 'mutate_inventory' && act.delta > prev.delta) {
-        dedupedActions[prevIdx] = matched ? { ...act, sku: matched.sku, itemName: matched.name } : act;
+        dedupedActions[prevIdx] = matched
+          ? { ...act, sku: matched.sku, itemName: matched.name, unitCostUsd: matched.baseCostUsd }
+          : act;
       }
     }
     activePlan = { ...activePlan, actions: dedupedActions };
@@ -284,19 +372,19 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
-    const sam = await refineMasksWithSam31(body.frameBase64, finalMasks);
+    const sam = mode === 'LIVE'
+      ? await refineMasksWithSam31(body.frameBase64, finalMasks)
+      : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
 
     const cropStartedAt = Date.now();
     const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, sam.masks);
     const cropLatencyMs = Math.max(1, Date.now() - cropStartedAt);
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
-    const piiStartedAt = Date.now();
     const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
-    const piiLatencyMs = Math.max(1, Date.now() - piiStartedAt);
 
     sendEvent('EDGE_PII_SHIELD', {
-      model: 'muse-spark-open-1026',
-      latencyMs: piiLatencyMs,
+      model: 'crop-gate (post-detection)',
+      latencyMs: cropLatencyMs,
       redactedMasks: piiMasks.map((o) => ({ id: o.id, bbox: o.bbox })),
     });
     sendEvent('SPATIAL_LOCK', {
@@ -306,6 +394,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       samUsed: sam.used,
       samLatencyMs: sam.latencyMs,
       samRefined: sam.refined,
+      usedFallbackPlan,
       objects: normalizedObjects,
     });
 
@@ -318,13 +407,23 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     sendEvent('SPARK_REASONING_TRACE', {
       model: sparkModelLabel,
       reasoning: cleanTelemetryReasoning,
+      rawReasoning,
     });
 
     sendEvent('SPARK_PLAN_LOCKED', {
       model: sparkModelLabel,
       latencyMs: sparkLatencyMs,
+      usedFallbackPlan,
       plan: activePlan,
     });
+
+    // Resolve inventory mutations BEFORE pricing so repricing targets all mutated SKUs deterministically (no race).
+    const mutatedSkusInRun: string[] = [];
+    for (const act of activePlan.actions) {
+      if (act.tool === 'mutate_inventory') {
+        mutatedSkusInRun.push(act.sku);
+      }
+    }
 
     const ACTION_PRIORITY: Record<string, number> = {
       quarantine_and_claim: 1,
@@ -335,202 +434,301 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const orderedActions = [...activePlan.actions].sort(
       (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
     );
-    let lastMutatedSku: string | null = null;
 
     async function runIsolatedToolNode<T>(
       toolName: string,
+      targetMaskId: string | undefined,
       timeoutMs: number,
-      task: () => Promise<T>
+      task: (signal: AbortSignal) => Promise<T>
     ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-      let timer: NodeJS.Timeout | undefined;
+      const nodeStarted = Date.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort(new Error(`${toolName} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       try {
         const value = await Promise.race([
-          task(),
+          task(controller.signal),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`${toolName} timed out after ${timeoutMs}ms`)), timeoutMs);
+            controller.signal.addEventListener(
+              'abort',
+              () => reject(controller.signal.reason || new Error(`${toolName} aborted`)),
+              { once: true }
+            );
           }),
         ]);
         return { ok: true, value };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown tool execution error';
+        app.log.error({ toolName, error: message }, 'Tool node failed');
+        sendEvent('TOOL_FAILED', {
+          tool: toolName,
+          targetMaskId,
+          error: message,
+          latencyMs: Date.now() - nodeStarted,
+        });
         return { ok: false, error: message };
       } finally {
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
       }
     }
 
-    const toolPromises = orderedActions.map(action => runIsolatedToolNode(action.tool, 15000, async () => {
-      if (action.tool === 'quarantine_and_claim') {
-        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
-        const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
-        const exceedsLimit = action.claimAmountUsd >= ZERO_TRUST_LIMIT_USD;
-        const dbCommit = await persistErpMutation('supplier_claims', {
-          ticketId,
-          maskId: targetObj?.id || action.targetMaskId,
-          label: targetObj?.label || 'Detected Item',
-          reason: action.defectReason,
-          amountUsd: action.claimAmountUsd,
-          thresholdUsd: ZERO_TRUST_LIMIT_USD,
-          bbox: targetObj?.bbox,
-          cropBase64: targetObj?.cropBase64,
-        });
+    const toolPromises = orderedActions.map((action) => {
+      const targetMaskId = 'targetMaskId' in action ? action.targetMaskId : undefined;
+      const timeoutMs = TOOL_TIMEOUT_MS[action.tool] ?? 15_000;
 
-        const claimRecord = {
-          id: ticketId,
-          mongoId: dbCommit.mongoId,
-          maskId: targetObj?.id || action.targetMaskId,
-          objectLabel: targetObj?.label || 'Detected Item',
-          reason: action.defectReason,
-          amountUsd: action.claimAmountUsd,
-          thresholdUsd: ZERO_TRUST_LIMIT_USD,
-          cropBase64: targetObj?.cropBase64,
-          guardrailStatus: exceedsLimit
+      return runIsolatedToolNode(action.tool, targetMaskId, timeoutMs, async (signal) => {
+        const toolStartedAt = Date.now();
+
+        if (action.tool === 'quarantine_and_claim') {
+          const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
+          const matchedLedgerItem = findBestInventoryMatch(LIVE_STORE_STATE.inventory, {
+            label: targetObj?.label,
+            itemName: action.defectReason,
+          });
+          const resolvedAmount =
+            matchedLedgerItem && Number.isFinite(matchedLedgerItem.baseCostUsd)
+              ? matchedLedgerItem.baseCostUsd
+              : action.claimAmountUsd;
+          const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
+          const exceedsLimit = resolvedAmount >= ZERO_TRUST_LIMIT_USD;
+          const guardrailStatus = exceedsLimit
             ? ('HELD_WAITING_VOICE_AUTH' as const)
-            : ('AUTHORIZED_AND_DISPATCHED' as const),
-          dispatchChannel: exceedsLimit ? undefined : 'AUTO_BELOW_THRESHOLD',
-          timestamp: new Date().toISOString(),
-        };
-        LIVE_STORE_STATE.claims.unshift(claimRecord);
-        sendEvent('TOOL_MUTATED', {
-          tool: action.tool,
-          targetMaskId: targetObj?.id || action.targetMaskId,
-          status: 'QUARANTINED',
-          result: claimRecord,
-        });
-      }
+            : ('AUTHORIZED_AND_DISPATCHED' as const);
 
-      if (action.tool === 'mutate_inventory') {
-        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId);
-        const hint = `${action.sku} ${action.itemName || ''} ${targetObj?.label || ''}`;
-        let item =
-          LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku) ||
-          findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName, label: targetObj?.label });
+          if (signal.aborted) return;
+          const dbCommit = await persistErpMutation('supplier_claims', {
+            ticketId,
+            maskId: targetObj?.id || action.targetMaskId,
+            matchedSku: matchedLedgerItem?.sku,
+            label: targetObj?.label || 'Detected Item',
+            reason: action.defectReason,
+            amountUsd: resolvedAmount,
+            thresholdUsd: ZERO_TRUST_LIMIT_USD,
+            guardrailStatus,
+            bbox: targetObj?.bbox,
+            cropBase64: targetObj?.cropBase64,
+          });
 
-        if (!item) {
-          item = {
-            sku: action.sku,
-            name: action.itemName || targetObj?.label || 'Detected Item',
-            stock: 0,
-            standardInboundLot: action.delta,
-            baseCostUsd: action.unitCostUsd || 45.0,
-            sellPriceUsd: Number(((action.unitCostUsd || 45.0) * 1.5).toFixed(2)),
+          const claimRecord = {
+            id: ticketId,
+            mongoId: dbCommit.mongoId,
+            maskId: targetObj?.id || action.targetMaskId,
+            matchedSku: matchedLedgerItem?.sku,
+            objectLabel: targetObj?.label || 'Detected Item',
+            reason: action.defectReason,
+            amountUsd: resolvedAmount,
+            thresholdUsd: ZERO_TRUST_LIMIT_USD,
+            cropBase64: targetObj?.cropBase64,
+            guardrailStatus,
+            dispatchChannel: exceedsLimit ? undefined : 'AUTO_BELOW_THRESHOLD',
+            timestamp: new Date().toISOString(),
           };
-          LIVE_STORE_STATE.inventory.unshift(item);
-        }
-
-        lastMutatedSku = item.sku;
-
-        const previousStock = item.stock;
-        item.stock += action.delta;
-
-        const dbCommit = await persistErpMutation('inventory_mutations', {
-          sku: item.sku,
-          targetMaskId: action.targetMaskId,
-          previousStock,
-          delta: action.delta,
-          newStock: item.stock,
-        });
-
-        sendEvent('TOOL_MUTATED', {
-          tool: action.tool,
-          targetMaskId: action.targetMaskId,
-          status: 'STOCK_UPDATED',
-          result: { ...item, previousStock, delta: action.delta, mongoId: dbCommit.mongoId },
-        });
-      }
-
-      if (action.tool === 'generate_studio_catalog') {
-        const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[normalizedObjects.length - 1];
-        const compiledStudioPrompt = compileMuseImagePromptFromDna(action.visualDna);
-
-        let studioUrl = STUDIO_RENDER_FALLBACK_URI;
-        let usedLive = false;
-        let synthesisLatencyMs = 0;
-        if (mode === 'LIVE' && process.env.META_MODEL_API_KEY) {
-          const imageStartedAt = Date.now();
-          const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt);
-          synthesisLatencyMs = Date.now() - imageStartedAt;
-          studioUrl = synth.imageUrl;
-          usedLive = synth.usedLiveApi;
-        }
-
-        const catId = `CAT-${Date.now().toString().slice(-4)}`;
-        const dbCommit = await persistErpMutation('catalog_items', {
-          catId,
-          maskId: targetObj?.id || action.targetMaskId,
-          title: action.productTitle,
-          visualDna: action.visualDna,
-          compiledStudioPrompt,
-          bbox: targetObj?.bbox,
-          sourceCropBase64: targetObj?.cropBase64,
-        });
-
-        const catalogCard = {
-          id: catId,
-          mongoId: dbCommit.mongoId,
-          maskId: targetObj?.id || action.targetMaskId,
-          title: action.productTitle,
-          visualDna: action.visualDna,
-          promptUsed: compiledStudioPrompt,
-          sourceCropUrl: targetObj?.cropBase64 && targetObj.cropBase64.startsWith('data:image')
-            ? targetObj.cropBase64
-            : RAW_WAREHOUSE_CROP_FALLBACK_URI,
-          modelUsed: 'Muse Image',
-          studioImageUrl: studioUrl,
-          usedLiveApi: usedLive,
-          synthesisLatencyMs,
-          status: 'PUBLISHED_TO_STORE',
-        };
-        LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
-        sendEvent('TOOL_MUTATED', {
-          tool: action.tool,
-          targetMaskId: targetObj?.id || action.targetMaskId,
-          status: 'STUDIO_RENDER_READY',
-          result: catalogCard,
-        });
-      }
-
-      if (action.tool === 'recalculate_margins_vm') {
-        let rawCode = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
-        if (mode === 'LIVE' && (process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY)) {
-          try {
-            rawCode = await Promise.race([
-              callMuseCodeGenerator(action.targetMarginPercent, action.taxRatePercent),
-              new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Code timeout')), 3000)),
-            ]);
-          } catch {}
-        }
-
-        // Buscar primero por el nombre/sku del prompt o usar el último item agregado al inventario
-        const priced = lastMutatedSku
-          ? LIVE_STORE_STATE.inventory.find(i => i.sku === lastMutatedSku)
-          : (findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName }) || LIVE_STORE_STATE.inventory[0]);
-
-        const baseRefCost = priced?.baseCostUsd || 95;
-        const vmResult = executeMuseCodeMarginCalc(
-          rawCode,
-          baseRefCost,
-          action.targetMarginPercent,
-          action.taxRatePercent
-        );
-
-        if (priced) {
-          priced.sellPriceUsd = vmResult.finalPrice;
-          await persistErpMutation('inventory_mutations', {
-            sku: priced.sku,
-            newPrice: vmResult.finalPrice,
-            marginApplied: action.targetMarginPercent
+          LIVE_STORE_STATE.claims.unshift(claimRecord);
+          sendEvent('TOOL_MUTATED', {
+            tool: action.tool,
+            targetMaskId: targetObj?.id || action.targetMaskId,
+            status: exceedsLimit ? 'HELD_GUARDRAIL' : 'MUTATED',
+            latencyMs: Date.now() - toolStartedAt,
+            result: claimRecord,
           });
         }
 
-        sendEvent('TOOL_MUTATED', {
-          tool: action.tool,
-          status: 'VM_EXECUTED',
-          modelUsed: 'Muse Code (node:vm)',
-          result: { ...vmResult, updatedSku: priced?.sku || 'SKU-DDR5-32GB-KIT' },
-        });
-      }
-    }));
+        if (action.tool === 'mutate_inventory') {
+          const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId);
+          const isExplicitTriage = action.sku.startsWith('SKU-TRIAGE-');
+          let item = isExplicitTriage
+            ? LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku)
+            : LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku) ||
+              findBestInventoryMatch(LIVE_STORE_STATE.inventory, {
+                sku: action.sku,
+                itemName: action.itemName,
+                label: targetObj?.label,
+              });
+
+          if (!item) {
+            const unitCost = Number(action.unitCostUsd) > 0 ? Number(action.unitCostUsd) : 85.0;
+            item = {
+              sku: action.sku,
+              name: action.itemName && action.itemName !== action.sku
+                ? action.itemName
+                : targetObj?.label || 'Unverified Asset [TRIAGE]',
+              stock: 0,
+              standardInboundLot: Math.max(1, action.delta),
+              baseCostUsd: unitCost,
+              sellPriceUsd: Number((unitCost * 1.45).toFixed(2)),
+            };
+            LIVE_STORE_STATE.inventory.unshift(item);
+          }
+
+          const previousStock = item.stock;
+          item.stock += action.delta;
+
+          if (signal.aborted) return;
+          await upsertInventorySnapshot(item);
+          const dbCommit = await persistErpMutation('inventory_mutations', {
+            eventType: 'STOCK_DELTA',
+            sku: item.sku,
+            name: item.name,
+            targetMaskId: action.targetMaskId,
+            previousStock,
+            delta: action.delta,
+            newStock: item.stock,
+            baseCostUsd: item.baseCostUsd,
+            sellPriceUsd: item.sellPriceUsd,
+          });
+
+          sendEvent('TOOL_MUTATED', {
+            tool: action.tool,
+            targetMaskId: action.targetMaskId,
+            status: 'MUTATED',
+            latencyMs: Date.now() - toolStartedAt,
+            result: { ...item, previousStock, delta: action.delta, mongoId: dbCommit.mongoId, maskId: action.targetMaskId },
+          });
+        }
+
+        if (action.tool === 'generate_studio_catalog') {
+          const targetObj =
+            normalizedObjects.find((o) => o.id === action.targetMaskId) ||
+            normalizedObjects[normalizedObjects.length - 1];
+          const compiledStudioPrompt = compileMuseImagePromptFromDna(action.visualDna);
+
+          let studioUrl = STUDIO_RENDER_FALLBACK_URI;
+          let usedLive = false;
+          let resolution = 'SVG_FALLBACK';
+          let synthesisLatencyMs = 0;
+          if (mode === 'LIVE' && process.env.META_MODEL_API_KEY) {
+            const imageStartedAt = Date.now();
+            const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt, signal);
+            synthesisLatencyMs = Date.now() - imageStartedAt;
+            studioUrl = synth.imageUrl;
+            usedLive = synth.usedLiveApi;
+            resolution = synth.resolution;
+          }
+
+          if (signal.aborted) return;
+          const catId = `CAT-${Date.now().toString().slice(-4)}`;
+          const dbCommit = await persistErpMutation('catalog_items', {
+            catId,
+            maskId: targetObj?.id || action.targetMaskId,
+            title: action.productTitle,
+            visualDna: action.visualDna,
+            compiledStudioPrompt,
+            resolution,
+            usedLiveApi: usedLive,
+            bbox: targetObj?.bbox,
+            sourceCropBase64: targetObj?.cropBase64,
+          });
+
+          const catalogCard = {
+            id: catId,
+            mongoId: dbCommit.mongoId,
+            maskId: targetObj?.id || action.targetMaskId,
+            title: action.productTitle,
+            visualDna: action.visualDna,
+            promptUsed: compiledStudioPrompt,
+            sourceCropUrl:
+              targetObj?.cropBase64 && targetObj.cropBase64.startsWith('data:image')
+                ? targetObj.cropBase64
+                : RAW_WAREHOUSE_CROP_FALLBACK_URI,
+            modelUsed: usedLive ? `Muse Image (${resolution})` : 'Muse Image (SVG fallback)',
+            studioImageUrl: studioUrl,
+            usedLiveApi: usedLive,
+            resolution,
+            synthesisLatencyMs,
+            status: 'PUBLISHED_TO_STORE',
+          };
+          LIVE_STORE_STATE.catalogDrafts.unshift(catalogCard);
+          sendEvent('TOOL_MUTATED', {
+            tool: action.tool,
+            targetMaskId: targetObj?.id || action.targetMaskId,
+            status: 'MUTATED',
+            latencyMs: synthesisLatencyMs || Date.now() - toolStartedAt,
+            result: catalogCard,
+          });
+        }
+
+        if (action.tool === 'recalculate_margins_vm') {
+          let rawCode = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
+          if (mode === 'LIVE' && (process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY)) {
+            try {
+              rawCode = await Promise.race([
+                callMuseCodeGenerator(action.targetMarginPercent, action.taxRatePercent),
+                new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Muse Code timeout')), 4500)),
+              ]);
+            } catch (codeErr) {
+              app.log.warn(`Muse Code call fell back to deterministic formula: ${(codeErr as Error).message}`);
+            }
+          }
+
+          // Reprice every non-triage SKU mutated in this run (using its real ledger baseCostUsd), or explicit match.
+          const candidateItems: CatalogSeedItem[] = [];
+          for (const sku of mutatedSkusInRun) {
+            if (sku.startsWith('SKU-TRIAGE-')) continue;
+            const found = LIVE_STORE_STATE.inventory.find((i) => i.sku === sku);
+            if (found && !candidateItems.some((c) => c.sku === found.sku)) candidateItems.push(found);
+          }
+          if (candidateItems.length === 0) {
+            const explicit =
+              findBestInventoryMatch(LIVE_STORE_STATE.inventory, {
+                sku: action.sku,
+                itemName: action.itemName,
+              }) || LIVE_STORE_STATE.inventory.find((i) => !i.sku.startsWith('SKU-TRIAGE-'));
+            if (explicit) candidateItems.push(explicit);
+          }
+
+          let primaryVmResult: ReturnType<typeof executeMuseCodeMarginCalc> | null = null;
+          const repricedSkus: Array<{ sku: string; finalPrice: number }> = [];
+
+          for (const item of candidateItems) {
+            const vmRes = executeMuseCodeMarginCalc(
+              rawCode,
+              item.baseCostUsd,
+              action.targetMarginPercent,
+              action.taxRatePercent
+            );
+            if (!primaryVmResult) primaryVmResult = vmRes;
+            item.sellPriceUsd = vmRes.finalPrice;
+            repricedSkus.push({ sku: item.sku, finalPrice: vmRes.finalPrice });
+
+            if (!signal.aborted) {
+              await upsertInventorySnapshot(item);
+              await persistErpMutation('inventory_mutations', {
+                eventType: 'REPRICE',
+                sku: item.sku,
+                name: item.name,
+                baseCostUsd: item.baseCostUsd,
+                sellPriceUsd: vmRes.finalPrice,
+                marginApplied: action.targetMarginPercent,
+                taxApplied: action.taxRatePercent,
+              });
+            }
+          }
+
+          const fallbackVm =
+            primaryVmResult ||
+            executeMuseCodeMarginCalc(rawCode, 95, action.targetMarginPercent, action.taxRatePercent);
+          const primaryTarget = repricedSkus[0] || { sku: 'SKU-DDR5-32GB-KIT', finalPrice: fallbackVm.finalPrice };
+
+          sendEvent('TOOL_MUTATED', {
+            tool: action.tool,
+            status: 'MUTATED',
+            latencyMs: Date.now() - toolStartedAt,
+            modelUsed: 'Muse Code',
+            result: {
+              finalPrice: primaryTarget.finalPrice,
+              executedCode: fallbackVm.cleanCodeShownInUI,
+              cleanCodeShownInUI: fallbackVm.cleanCodeShownInUI,
+              usedFallback: fallbackVm.usedFallback,
+              updatedSku: primaryTarget.sku,
+              repricedSkus,
+              targetMarginPercent: action.targetMarginPercent,
+              taxRatePercent: action.taxRatePercent,
+            },
+          });
+        }
+      });
+    });
 
     await Promise.allSettled(toolPromises);
 
@@ -541,13 +739,20 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
   } catch (error) {
     sendEvent('ORCHESTRATION_ERROR', { message: (error as Error).message });
   } finally {
-    reply.raw.end();
+    if (!reply.raw.writableEnded) {
+      reply.raw.end();
+    }
   }
 });
 
-app.post('/api/confirm-guardrail', async (_request, reply) => {
-  const held = LIVE_STORE_STATE.claims.find((c: any) => c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH') as any;
-  if (!held) return reply.status(404).send({ ok: false });
+app.post('/api/confirm-guardrail', async (request, reply) => {
+  const body = (request.body as { claimId?: string } | undefined) || {};
+  const held = LIVE_STORE_STATE.claims.find((c: any) =>
+    body.claimId
+      ? c.id === body.claimId && c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH'
+      : c.guardrailStatus === 'HELD_WAITING_VOICE_AUTH'
+  ) as any;
+  if (!held) return reply.status(404).send({ ok: false, error: 'NO_HELD_CLAIM_FOUND' });
 
   const dispatch = await dispatchSupplierClaimNotification({
     id: held.id as string,
@@ -557,23 +762,167 @@ app.post('/api/confirm-guardrail', async (_request, reply) => {
     cropBase64: held.cropBase64 as string | undefined,
   });
 
+  const authorizedAt = new Date().toISOString();
   held.guardrailStatus = 'AUTHORIZED_AND_DISPATCHED';
   held.dispatchChannel = dispatch.dispatchedVia;
   held.externalReceiptId = dispatch.externalReceiptId;
-  return reply.send({ ok: true, claim: held });
+  held.deliveredExternally = dispatch.deliveredExternally;
+  held.authorizedAt = authorizedAt;
+
+  await updateClaimAuthorizationInDb(held.id as string, {
+    guardrailStatus: held.guardrailStatus,
+    dispatchChannel: dispatch.dispatchedVia,
+    externalReceiptId: dispatch.externalReceiptId,
+    authorizedAt,
+  });
+
+  return reply.send({ ok: true, claim: held, deliveredExternally: dispatch.deliveredExternally });
+});
+
+app.post('/api/triage/resolve', async (request, reply) => {
+  const body =
+    (request.body as {
+      maskId: string;
+      sku: string;
+      name?: string;
+      action: 'STOCK' | 'CLAIM';
+      delta?: number;
+      reason?: string;
+      cropBase64?: string;
+    }) || ({} as any);
+
+  const cleanSku = String(body.sku || '').trim().toUpperCase();
+  if (!cleanSku) return reply.status(400).send({ ok: false, error: 'SKU_REQUIRED' });
+
+  if (body.action === 'CLAIM') {
+    const matched = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
+    const amountUsd = matched?.baseCostUsd ?? 85.0;
+    const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
+    const exceedsLimit = amountUsd >= ZERO_TRUST_LIMIT_USD;
+    const guardrailStatus = exceedsLimit ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED';
+    const reason = body.reason || `Supervisor triage defect on ${body.name || cleanSku}`;
+
+    const dbCommit = await persistErpMutation('supplier_claims', {
+      ticketId,
+      maskId: body.maskId,
+      matchedSku: cleanSku,
+      label: body.name || cleanSku,
+      reason,
+      amountUsd,
+      thresholdUsd: ZERO_TRUST_LIMIT_USD,
+      guardrailStatus,
+      cropBase64: body.cropBase64,
+    });
+
+    const claimRecord = {
+      id: ticketId,
+      mongoId: dbCommit.mongoId,
+      maskId: body.maskId,
+      matchedSku: cleanSku,
+      objectLabel: body.name || cleanSku,
+      reason,
+      amountUsd,
+      thresholdUsd: ZERO_TRUST_LIMIT_USD,
+      cropBase64: body.cropBase64,
+      guardrailStatus,
+      timestamp: new Date().toISOString(),
+    };
+    LIVE_STORE_STATE.claims.unshift(claimRecord);
+    return reply.send({ ok: true, claim: claimRecord, inventory: LIVE_STORE_STATE.inventory });
+  }
+
+  // STOCK resolution: promote SKU-TRIAGE-* if present, otherwise increment/insert SKU.
+  const delta = Number(body.delta) > 0 ? Number(body.delta) : 1;
+  const triageIdx = LIVE_STORE_STATE.inventory.findIndex((i) => i.sku.startsWith('SKU-TRIAGE-'));
+  let targetItem = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
+
+  if (triageIdx !== -1) {
+    const triageItem = LIVE_STORE_STATE.inventory[triageIdx];
+    LIVE_STORE_STATE.inventory.splice(triageIdx, 1);
+    try {
+      const db = await getPersistenceDb();
+      await db?.collection('inventory_catalog').deleteOne({ sku: triageItem.sku });
+    } catch {
+      // ignore cleanup error
+    }
+    if (!targetItem) {
+      targetItem = {
+        sku: cleanSku,
+        name: `${body.name || cleanSku} (Verified)`,
+        stock: triageItem.stock || delta,
+        standardInboundLot: delta,
+        baseCostUsd: triageItem.baseCostUsd || 85.0,
+        sellPriceUsd: triageItem.sellPriceUsd || 123.25,
+      };
+      LIVE_STORE_STATE.inventory.unshift(targetItem);
+    } else {
+      targetItem.stock += triageItem.stock || delta;
+    }
+  } else if (targetItem) {
+    targetItem.stock += delta;
+  } else {
+    targetItem = {
+      sku: cleanSku,
+      name: body.name || cleanSku,
+      stock: delta,
+      standardInboundLot: delta,
+      baseCostUsd: 85.0,
+      sellPriceUsd: 123.25,
+    };
+    LIVE_STORE_STATE.inventory.unshift(targetItem);
+  }
+
+  await upsertInventorySnapshot(targetItem);
+  await persistErpMutation('inventory_mutations', {
+    eventType: 'SUPERVISOR_TRIAGE_RESOLVED',
+    sku: targetItem.sku,
+    name: targetItem.name,
+    targetMaskId: body.maskId,
+    delta,
+    newStock: targetItem.stock,
+    baseCostUsd: targetItem.baseCostUsd,
+    sellPriceUsd: targetItem.sellPriceUsd,
+  });
+
+  return reply.send({ ok: true, item: targetItem, inventory: LIVE_STORE_STATE.inventory });
 });
 
 app.post('/api/reset-demo', async (_request, reply) => {
-  await syncStoreStateFromMongo(); // Vuelve a recargar de la base de datos masiva
+  LIVE_STORE_STATE.inventory = cloneInitialCatalog();
   LIVE_STORE_STATE.claims = [];
   LIVE_STORE_STATE.catalogDrafts = [];
-  return reply.send({ ok: true });
+  try {
+    const db = await getPersistenceDb();
+    if (db) {
+      await db.collection('inventory_catalog').deleteMany({});
+      await db.collection('supplier_claims').deleteMany({});
+      await db.collection('inventory_catalog').insertMany(
+        LIVE_STORE_STATE.inventory.map((item) => ({ ...item, updatedAt: new Date() }))
+      );
+    }
+  } catch (err) {
+    app.log.warn(`Reset demo DB cleanup skipped: ${(err as Error).message}`);
+  }
+  return reply.send({ ok: true, inventory: LIVE_STORE_STATE.inventory });
 });
 
 app.get('/api/live-ledger', async (_request, reply) => {
   return reply.send({ ok: true, inventory: LIVE_STORE_STATE.inventory });
 });
 
+app.get('/api/health', async (_request, reply) => {
+  const db = await getPersistenceDb();
+  return reply.send({
+    ok: true,
+    mode: process.env.ORCHESTRATOR_MODE || 'LIVE',
+    mongoConnected: Boolean(db),
+    basetenConfigured: Boolean(process.env.BASETEN_API_KEY),
+    metaApiConfigured: Boolean(process.env.META_MODEL_API_KEY),
+    telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    skuCount: LIVE_STORE_STATE.inventory.length,
+  });
+});
+
 app.listen({ port: Number(process.env.PORT) || 4000, host: '0.0.0.0' }, () => {
-  console.log('⚡ KINETIX OS Orchestrator running on http://localhost:4000');
+  console.log('KINETIX OS Orchestrator running on http://localhost:4000');
 });
