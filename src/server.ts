@@ -335,6 +335,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const orderedActions = [...activePlan.actions].sort(
       (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
     );
+    let lastMutatedSku: string | null = null;
 
     async function runIsolatedToolNode<T>(
       toolName: string,
@@ -416,6 +417,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           };
           LIVE_STORE_STATE.inventory.unshift(item);
         }
+
+        lastMutatedSku = item.sku;
+
         const previousStock = item.stock;
         item.stock += action.delta;
 
@@ -498,9 +502,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         }
 
         // Buscar primero por el nombre/sku del prompt o usar el último item agregado al inventario
-        const priced =
-          findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName }) ||
-          LIVE_STORE_STATE.inventory[0];
+        const priced = lastMutatedSku
+          ? LIVE_STORE_STATE.inventory.find(i => i.sku === lastMutatedSku)
+          : (findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName }) || LIVE_STORE_STATE.inventory[0]);
 
         const baseRefCost = priced?.baseCostUsd || 95;
         const vmResult = executeMuseCodeMarginCalc(

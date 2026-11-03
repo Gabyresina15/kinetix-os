@@ -32,6 +32,22 @@ export async function persistErpMutation(collection: string, doc: any): Promise<
   try {
     const db = await getPersistenceDb();
     if (db) {
+      if (collection === 'inventory_mutations') {
+        const catalogDoc = {
+          sku: doc.sku,
+          name: doc.name || doc.sku,
+          stock: doc.newStock,
+          baseCostUsd: doc.baseCostUsd || 95.0,
+          sellPriceUsd: doc.sellPriceUsd || doc.newPrice || 158.0
+        };
+        // Update Catalog explicitly
+        await db.collection('inventory_catalog').updateOne(
+          { sku: doc.sku },
+          { $set: catalogDoc },
+          { upsert: true }
+        );
+      }
+
       const result = await db.collection(collection).insertOne({ ...doc, createdAt: new Date() });
       return { mongoId: result.insertedId.toString() };
     }
