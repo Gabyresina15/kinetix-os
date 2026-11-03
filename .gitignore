@@ -3,4 +3,5 @@ dist/
 .env
 *.log
 fixtures/golden-path/*.json
+!fixtures/golden-path/golden-spark-replay.json
 data/ledger/

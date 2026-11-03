@@ -19,7 +19,7 @@ Analyze the attached workspace image and the operator voice command. The scene c
    - CRITICAL GEOMETRY RULE: Before writing the JSON, mentally locate the exact [left, top, right, bottom] visual edges of the FULL physical object (including top fan hoods/heatsinks and bottom bases), then compute width = (right - left) and height = (bottom - top).
    - NON-OVERLAP RULE: Neighboring objects on the table (such as RAM modules next to an M.2 SSD) must NEVER overlap. The right edge (xMin + width) of the left object must end strictly before the xMin of the adjacent object to its right.
 4. Every targetMaskId must match an id in detectedObjects.
-5. Keep internal reasoning under 110 words: briefly list each target object's [left, top, right, bottom] edges to verify tight non-overlapping boxes before outputting raw JSON only (no markdown).
+5. Keep internal thinking under 75 words: pick the closest matching SKU from the ledger immediately without debating alternatives, verify non-overlapping [xMin, yMin, width, height] boxes, and output ONLY the raw JSON object (no markdown, no prose outside JSON).
 6. Match sku and itemName from this ledger when the object is the same kind of product. delta is the count the operator asked to add (a pair = 2), not the number of boxes.
    - RAPID TRIAGE RULE: If the operator asks to add an item that is not in the ledger or says they don't know the exact model/SKU yet, emit mutate_inventory with sku: "SKU-TRIAGE-PENDING" and itemName: "<Object Name> [PENDING OCR TRIAGE]".
 7. If the operator names a margin percent, use that number. taxRatePercent is 21 unless they say otherwise.

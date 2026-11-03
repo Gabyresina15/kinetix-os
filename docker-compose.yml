@@ -1,0 +1,32 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - kinetix_mongo_data:/data/db
+
+  kinetix-os:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: "4000"
+      ORCHESTRATOR_MODE: "${ORCHESTRATOR_MODE:-REPLAY}"
+      MONGO_URI: "mongodb://mongo:27017/kinetix_erp"
+      BASETEN_API_KEY: "${BASETEN_API_KEY:-}"
+      BASETEN_MODEL: "meta-models/muse-spark-open-1026"
+      META_MODEL_API_KEY: "${META_MODEL_API_KEY:-}"
+      META_API_BASE_URL: "https://api.meta.ai/v1"
+      META_SAM_MODEL: "sam-3.1"
+      META_IMAGE_MODEL: "muse-image-1.0"
+      META_CODE_MODEL: "muse-wonder-1.0"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+    depends_on:
+      - mongo
+
+volumes:
+  kinetix_mongo_data:

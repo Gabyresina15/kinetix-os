@@ -237,7 +237,8 @@ export async function callBasetenMuseSparkOpen(
   voiceTranscript: string,
   frameBase64?: string | null,
   onDetectedObjects?: (objects: DetectedObjectDraft[]) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onReasoningProgress?: (partialReasoning: string, elapsedMs: number) => void
 ): Promise<SparkInferenceResult> {
   const apiKey = process.env.BASETEN_API_KEY;
   const baseUrl = process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
@@ -290,12 +291,20 @@ export async function callBasetenMuseSparkOpen(
   }
 
   let spatialNotified = false;
+  let lastProgressAt = 0;
+  let lastSentLen = 0;
   const notify = (content: string, reasoning: string) => {
+    const now = Date.now();
+    if (onReasoningProgress && reasoning.length > lastSentLen && now - lastProgressAt >= 180) {
+      lastProgressAt = now;
+      lastSentLen = reasoning.length;
+      onReasoningProgress(reasoning.slice(-520), now - start);
+    }
     if (spatialNotified || !onDetectedObjects) return;
     const drafts = tryExtractDetectedObjects(content) || tryExtractDetectedObjects(reasoning);
     if (!drafts) return;
     spatialNotified = true;
-    console.log('[SPATIAL_LOCK EARLY]', drafts.length, 'objects in', Date.now() - start, 'ms');
+    console.log('[SPATIAL_LOCK EARLY]', drafts.length, 'objects in', now - start, 'ms');
     onDetectedObjects(drafts);
   };
 
@@ -678,21 +687,32 @@ export async function refineMasksWithSam31<T extends SamMask>(
 
 export async function callMuseCodeGenerator(
   targetMarginPercent: number,
-  taxRatePercent: number
-): Promise<string> {
+  taxRatePercent: number,
+  operatorDirective?: string,
+  signal?: AbortSignal
+): Promise<{ code: string; modelUsed: string }> {
   const useMeta = Boolean(process.env.META_MODEL_API_KEY);
   const apiKey = process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY;
+  const rawMetaBase = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
   const baseUrl = useMeta
-    ? process.env.META_API_BASE_URL || 'https://api.llama.com/v1'
+    ? rawMetaBase.includes('api.llama.com')
+      ? 'https://api.meta.ai/v1'
+      : rawMetaBase
     : process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
+
+  // Normalize legacy 'muse-code' CLI alias to live Meta Model API 'muse-wonder-1.0'
+  const rawConfiguredModel = process.env.META_CODE_MODEL;
+  const metaCodeModel =
+    !rawConfiguredModel || rawConfiguredModel === 'muse-code' ? 'muse-wonder-1.0' : rawConfiguredModel;
   const model = useMeta
-    ? process.env.META_CODE_MODEL || 'muse-code'
+    ? metaCodeModel
     : process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026';
 
   if (!apiKey) throw new Error('NO_API_KEY_FOR_CODE_GEN');
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
+    signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -700,25 +720,31 @@ export async function callMuseCodeGenerator(
     body: JSON.stringify({
       model,
       temperature: 0,
-      max_tokens: 350,
+      max_tokens: 4096,
       messages: [
         {
-          role: 'system',
-          content:
-            'Output ONLY a pure JavaScript function named calculatePrice(cost, marginPct, taxPct) that returns (cost / (1 - marginPct / 100)) * (1 + taxPct / 100). No markdown, no comments.',
-        },
-        {
           role: 'user',
-          content: `Generate calculatePrice(cost, marginPct, taxPct) for margin ${targetMarginPercent}% and tax ${taxRatePercent}%.`,
+          content: [
+            'Keep internal reasoning under 35 words. Return ONLY pure JavaScript formatted across 6-9 indented lines (no markdown fences, no comments):',
+            'Define function calculatePrice(ctx) where ctx = { cost, marginPct, taxPct, stock, inboundDelta }.',
+            'Compute gross = ctx.cost / (1 - ctx.marginPct / 100), apply stock tiering (0.97 if ctx.stock > 120, 1.04 if ctx.stock < 15, plus any explicit discount/surcharge mentioned in the directive below), multiply by (1 + ctx.taxPct / 100), and return Number(result.toFixed(2)).',
+            `Parameters: marginPct=${targetMarginPercent}, taxPct=${taxRatePercent}. Directive: "${(operatorDirective || '').slice(0, 220)}"`,
+          ].join('\n'),
         },
       ],
     }),
   });
 
-  if (!response.ok) throw new Error(`Code Gen HTTP ${response.status}`);
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Policy Synth (${model}) HTTP ${response.status}: ${errText.slice(0, 160)}`);
+  }
   const data = (await response.json()) as any;
   const raw: string = data.choices?.[0]?.message?.content || '';
-  return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  return {
+    code: raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(),
+    modelUsed: useMeta ? `${model} (Meta Model API)` : `${model} (Baseten)`,
+  };
 }
 
 function escapeTelegramHtml(text: string): string {

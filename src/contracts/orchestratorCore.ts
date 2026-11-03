@@ -1,5 +1,9 @@
-import vm from 'node:vm';
 import { z } from 'zod';
+import {
+  executeWasmPricingSandbox,
+  type PricingContextInput,
+  type WasmPricingExecutionResult,
+} from '../services/wasmPricingSandbox';
 
 const flexibleText = (fallback: string) =>
   z.preprocess((value) => {
@@ -312,51 +316,18 @@ export function tightenAndDeoverlapBoxes<
   return result;
 }
 
-export function executeMuseCodeMarginCalc(
+export async function executeMuseCodeMarginCalc(
   rawLLMCode: string,
   baseCost: number,
   targetMarginPct: number,
-  taxPct: number
-): { finalPrice: number; cleanCodeShownInUI: string; usedFallback: boolean } {
-  const strippedBody = rawLLMCode
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/```\w*\n?|\n?```/g, '')
-    .replace(/import\s+.*?from\s+['"].*?['"];?/g, '')
-    .trim();
-
-  const deterministicFallbackPrice = Number(
-    ((baseCost / (1 - targetMarginPct / 100)) * (1 + taxPct / 100)).toFixed(2)
-  );
-
-  try {
-    const sandbox = { baseCost, targetMarginPct, taxPct, outputPrice: 0 };
-    vm.createContext(sandbox, {
-      codeGeneration: { strings: false, wasm: false },
-    });
-
-    const wrappedScript = `
-      ${strippedBody}
-      if (typeof calculatePrice === 'function') {
-        outputPrice = Number(calculatePrice(baseCost, targetMarginPct, taxPct).toFixed(2));
-      }
-    `;
-    const script = new vm.Script(wrappedScript);
-    script.runInContext(sandbox, { timeout: 50 });
-
-    if (typeof sandbox.outputPrice === 'number' && sandbox.outputPrice > baseCost && !Number.isNaN(sandbox.outputPrice)) {
-      return {
-        finalPrice: sandbox.outputPrice,
-        cleanCodeShownInUI: strippedBody,
-        usedFallback: false,
-      };
-    }
-    throw new Error('Invalid numerical output from VM');
-  } catch (e) {
-    const fallbackCodeSnippet = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
-    return {
-      finalPrice: deterministicFallbackPrice,
-      cleanCodeShownInUI: fallbackCodeSnippet,
-      usedFallback: true,
-    };
-  }
+  taxPct: number,
+  extra?: Pick<PricingContextInput, 'currentStock' | 'inboundDelta'>
+): Promise<WasmPricingExecutionResult> {
+  return executeWasmPricingSandbox(rawLLMCode, {
+    baseCost,
+    targetMarginPct,
+    taxPct,
+    currentStock: extra?.currentStock,
+    inboundDelta: extra?.inboundDelta,
+  });
 }

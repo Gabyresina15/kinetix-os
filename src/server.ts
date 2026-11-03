@@ -32,9 +32,35 @@ import {
   updateClaimAuthorizationInDb,
 } from './services/spatialCropperAndDb';
 import { CatalogSeedItem, cloneInitialCatalog, INITIAL_CATALOG } from './data/catalogSeed';
+import {
+  buildDeterministicPolicyCode,
+  verifyWasmEscapeBlocked,
+  type WasmPricingExecutionResult,
+} from './services/wasmPricingSandbox';
 
-const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
+export const app = Fastify({ logger: true, bodyLimit: 15 * 1024 * 1024 });
 app.register(cors, { origin: '*' });
+
+const rateWindowByIp = new Map<string, number[]>();
+function checkRateLimit(ip: string): boolean {
+  const maxPerMin = Number(process.env.RATE_LIMIT_PER_MIN) || 15;
+  const now = Date.now();
+  const recent = (rateWindowByIp.get(ip) || []).filter((ts) => now - ts < 60_000);
+  if (recent.length >= maxPerMin) {
+    rateWindowByIp.set(ip, recent);
+    return false;
+  }
+  recent.push(now);
+  rateWindowByIp.set(ip, recent);
+  return true;
+}
+
+function isAuthorizedRequest(headers: Record<string, unknown>): boolean {
+  const requiredToken = process.env.KINETIX_LIVE_TOKEN;
+  if (!requiredToken || (process.env.ORCHESTRATOR_MODE || 'LIVE') === 'REPLAY') return true;
+  const provided = headers['x-kinetix-token'];
+  return typeof provided === 'string' && provided === requiredToken;
+}
 
 export const LIVE_STORE_STATE = {
   inventory: cloneInitialCatalog() as CatalogSeedItem[],
@@ -195,11 +221,18 @@ function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
 const TOOL_TIMEOUT_MS: Record<string, number> = {
   quarantine_and_claim: 12_000,
   mutate_inventory: 10_000,
-  recalculate_margins_vm: 10_000,
+  recalculate_margins_vm: 14_000,
   generate_studio_catalog: 30_000,
 };
 
 app.post('/api/orchestrate-stream', async (request, reply) => {
+  if (!isAuthorizedRequest(request.headers as Record<string, unknown>)) {
+    return reply.status(401).send({ ok: false, error: 'UNAUTHORIZED_KINETIX_LIVE_TOKEN' });
+  }
+  if (!checkRateLimit(request.ip || 'local')) {
+    return reply.status(429).send({ ok: false, error: 'RATE_LIMIT_EXCEEDED' });
+  }
+
   const body =
     (request.body as { frameBase64?: string | null; voiceTranscript?: string; resetBeforeRun?: boolean }) || {};
   const voiceTranscript =
@@ -266,11 +299,18 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       });
     };
 
-    const fixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'last-baseten-spark-run.json');
+    const liveFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'last-baseten-spark-run.json');
+    const trackedFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'golden-spark-replay.json');
 
     if (mode === 'REPLAY') {
       try {
-        const rawFixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
+        let rawText: string;
+        try {
+          rawText = await fs.readFile(liveFixturePath, 'utf8');
+        } catch {
+          rawText = await fs.readFile(trackedFixturePath, 'utf8');
+        }
+        const rawFixture = JSON.parse(rawText);
         if (rawFixture?.liveSpark?.plan) {
           activePlan = rawFixture.liveSpark.plan;
           rawReasoning = rawFixture.liveSpark.reasoningTrace || 'Loaded from recorded golden-path fixture.';
@@ -294,7 +334,17 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           voiceTranscript,
           body.frameBase64,
           (drafts) => emitEarlyObjects(drafts),
-          sparkAbort.signal
+          sparkAbort.signal,
+          (partialReasoning, elapsedMs) => {
+            const compact = partialReasoning.replace(/\s+/g, ' ').trim();
+            if (compact) {
+              sendEvent('SPARK_REASONING_DELTA', {
+                model: process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026',
+                elapsedMs,
+                snippet: `[LIVE_SPARK_STREAM] (${(elapsedMs / 1000).toFixed(1)}s) ${compact}`,
+              });
+            }
+          }
         );
         console.log('[DETECTED]', liveSpark.plan.detectedObjects?.length || 0);
         activePlan = liveSpark.plan;
@@ -302,9 +352,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         sparkLatencyMs = liveSpark.latencyMs;
         sparkModelLabel = liveSpark.modelUsed;
 
-        await fs.mkdir(path.dirname(fixturePath), { recursive: true });
+        await fs.mkdir(path.dirname(liveFixturePath), { recursive: true });
         await fs.writeFile(
-          fixturePath,
+          liveFixturePath,
           JSON.stringify({ timestamp: new Date().toISOString(), liveSpark }, null, 2)
         );
       } catch (liveErr) {
@@ -486,10 +536,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             label: targetObj?.label,
             itemName: action.defectReason,
           });
+          const plannedClaim = Number(action.claimAmountUsd);
           const resolvedAmount =
-            matchedLedgerItem && Number.isFinite(matchedLedgerItem.baseCostUsd)
-              ? matchedLedgerItem.baseCostUsd
-              : action.claimAmountUsd;
+            Number.isFinite(plannedClaim) && plannedClaim > 0 && plannedClaim < ZERO_TRUST_LIMIT_USD
+              ? plannedClaim
+              : matchedLedgerItem && matchedLedgerItem.baseCostUsd >= ZERO_TRUST_LIMIT_USD
+                ? matchedLedgerItem.baseCostUsd
+                : Number.isFinite(plannedClaim) && plannedClaim > 0
+                  ? plannedClaim
+                  : matchedLedgerItem?.baseCostUsd ?? 65;
           const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
           const exceedsLimit = resolvedAmount >= ZERO_TRUST_LIMIT_USD;
           const guardrailStatus = exceedsLimit
@@ -649,20 +704,29 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         }
 
         if (action.tool === 'recalculate_margins_vm') {
-          let rawCode = `function calculatePrice(cost, marginPct, taxPct) {\n  const netMarginPrice = cost / (1 - (marginPct / 100));\n  return netMarginPrice * (1 + (taxPct / 100));\n}`;
+          let rawCode = buildDeterministicPolicyCode();
+          let policyModelLabel = 'Deterministic WASM Policy';
           if (mode === 'LIVE' && (process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY)) {
             try {
-              rawCode = await Promise.race([
-                callMuseCodeGenerator(action.targetMarginPercent, action.taxRatePercent),
-                new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Muse Code timeout')), 4500)),
-              ]);
+              const synth = await callMuseCodeGenerator(
+                action.targetMarginPercent,
+                action.taxRatePercent,
+                voiceTranscript,
+                signal
+              );
+              rawCode = synth.code;
+              policyModelLabel = synth.modelUsed;
             } catch (codeErr) {
-              app.log.warn(`Muse Code call fell back to deterministic formula: ${(codeErr as Error).message}`);
+              app.log.warn(`Policy synthesis fell back to deterministic WASM formula: ${(codeErr as Error).message}`);
             }
           }
 
           // Reprice every non-triage SKU mutated in this run (using its real ledger baseCostUsd), or explicit match.
           const candidateItems: CatalogSeedItem[] = [];
+          const deltaBySku = new Map<string, number>();
+          for (const act of activePlan.actions) {
+            if (act.tool === 'mutate_inventory') deltaBySku.set(act.sku, act.delta);
+          }
           for (const sku of mutatedSkusInRun) {
             if (sku.startsWith('SKU-TRIAGE-')) continue;
             const found = LIVE_STORE_STATE.inventory.find((i) => i.sku === sku);
@@ -677,15 +741,19 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             if (explicit) candidateItems.push(explicit);
           }
 
-          let primaryVmResult: ReturnType<typeof executeMuseCodeMarginCalc> | null = null;
+          let primaryVmResult: WasmPricingExecutionResult | null = null;
           const repricedSkus: Array<{ sku: string; finalPrice: number }> = [];
 
           for (const item of candidateItems) {
-            const vmRes = executeMuseCodeMarginCalc(
+            const vmRes = await executeMuseCodeMarginCalc(
               rawCode,
               item.baseCostUsd,
               action.targetMarginPercent,
-              action.taxRatePercent
+              action.taxRatePercent,
+              {
+                currentStock: item.stock,
+                inboundDelta: deltaBySku.get(item.sku) ?? 0,
+              }
             );
             if (!primaryVmResult) primaryVmResult = vmRes;
             item.sellPriceUsd = vmRes.finalPrice;
@@ -701,25 +769,30 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
                 sellPriceUsd: vmRes.finalPrice,
                 marginApplied: action.targetMarginPercent,
                 taxApplied: action.taxRatePercent,
+                sandboxEngine: vmRes.sandboxEngine,
+                policyModel: policyModelLabel,
               });
             }
           }
 
           const fallbackVm =
             primaryVmResult ||
-            executeMuseCodeMarginCalc(rawCode, 95, action.targetMarginPercent, action.taxRatePercent);
+            (await executeMuseCodeMarginCalc(rawCode, 95, action.targetMarginPercent, action.taxRatePercent));
           const primaryTarget = repricedSkus[0] || { sku: 'SKU-DDR5-32GB-KIT', finalPrice: fallbackVm.finalPrice };
 
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             status: 'MUTATED',
             latencyMs: Date.now() - toolStartedAt,
-            modelUsed: 'Muse Code',
+            modelUsed: policyModelLabel,
             result: {
               finalPrice: primaryTarget.finalPrice,
               executedCode: fallbackVm.cleanCodeShownInUI,
               cleanCodeShownInUI: fallbackVm.cleanCodeShownInUI,
               usedFallback: fallbackVm.usedFallback,
+              sandboxEngine: fallbackVm.sandboxEngine,
+              invariantsPassed: fallbackVm.invariantsPassed,
+              policyModelUsed: policyModelLabel,
               updatedSku: primaryTarget.sku,
               repricedSkus,
               targetMarginPercent: action.targetMarginPercent,
@@ -912,6 +985,7 @@ app.get('/api/live-ledger', async (_request, reply) => {
 
 app.get('/api/health', async (_request, reply) => {
   const db = await getPersistenceDb();
+  const wasmProbe = await verifyWasmEscapeBlocked();
   return reply.send({
     ok: true,
     mode: process.env.ORCHESTRATOR_MODE || 'LIVE',
@@ -919,10 +993,19 @@ app.get('/api/health', async (_request, reply) => {
     basetenConfigured: Boolean(process.env.BASETEN_API_KEY),
     metaApiConfigured: Boolean(process.env.META_MODEL_API_KEY),
     telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    sandboxEngine: 'quickjs-wasm',
+    sandboxIsolated: wasmProbe.isolated,
     skuCount: LIVE_STORE_STATE.inventory.length,
   });
 });
 
-app.listen({ port: Number(process.env.PORT) || 4000, host: '0.0.0.0' }, () => {
-  console.log('KINETIX OS Orchestrator running on http://localhost:4000');
-});
+const isTestRunner =
+  process.env.KINETIX_TEST_MODE === '1' ||
+  process.execArgv.includes('--test') ||
+  process.argv.some((arg) => arg.includes('.test.'));
+
+if (!isTestRunner) {
+  app.listen({ port: Number(process.env.PORT) || 4000, host: '0.0.0.0' }, () => {
+    console.log('KINETIX OS Orchestrator running on http://localhost:4000');
+  });
+}

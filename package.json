@@ -1,28 +1,35 @@
 {
   "name": "kinetix-os",
   "version": "1.0.0",
-  "description": "Kinetix OS - Spatial ERP & Field Agent Orchestrator (Meta Hackathon)",
+  "description": "Kinetix OS - Closed-Loop Spatial ERP & Multimodal DAG Orchestrator (Meta Global AI Developer Hackathon)",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
+    "replay": "tsx src/scripts/startReplay.ts",
+    "seed": "tsx src/scripts/seedDb.ts",
     "build": "tsc",
+    "test": "tsx --test src/__tests__/kinetix.test.ts",
     "test:stream": "curl -N -X POST http://localhost:4000/api/orchestrate-stream"
   },
   "keywords": [
     "kinetix",
-    "spatial",
-    "agents",
-    "meta",
-    "hackathon"
+    "spatial-erp",
+    "muse-spark-open",
+    "sam-3.1",
+    "muse-image",
+    "muse-wonder",
+    "quickjs-wasm",
+    "meta-hackathon"
   ],
-  "author": "Kinetix Labs",
+  "author": "Gabriel Sebastián Resina Barrientos",
   "license": "MIT",
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.1.0",
     "mongodb": "^7.7.0",
+    "quickjs-emscripten": "^0.31.0",
     "sharp": "^0.35.5",
     "zod": "^3.23.8"
   },
