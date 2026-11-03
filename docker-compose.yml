@@ -23,6 +23,7 @@ services:
       META_SAM_MODEL: "sam-3.1"
       META_IMAGE_MODEL: "muse-image-1.0"
       META_CODE_MODEL: "muse-wonder-1.0"
+      META_VOICE_MODEL: "muse-voice-transcribe-1.0"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
     depends_on:

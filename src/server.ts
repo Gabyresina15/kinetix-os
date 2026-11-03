@@ -63,10 +63,18 @@ function checkRateLimit(ip: string): boolean {
   return true;
 }
 
+function hasRealApiKey(raw?: string): boolean {
+  if (!raw) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('your_') || trimmed.endsWith('_here')) return false;
+  return true;
+}
+
 function isAuthorizedRequest(headers: Record<string, unknown>): boolean {
   const requiredToken = process.env.KINETIX_LIVE_TOKEN;
   if (!requiredToken || (process.env.ORCHESTRATOR_MODE || 'LIVE') === 'REPLAY') return true;
-  const provided = headers['x-kinetix-token'];
+  const provided = headers['x-kinetix-token'] ?? headers['x-kinetix-live-token'];
   return typeof provided === 'string' && provided === requiredToken;
 }
 
@@ -315,7 +323,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const liveFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'last-baseten-spark-run.json');
     const trackedFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'golden-spark-replay.json');
 
-    if (mode === 'REPLAY') {
+    const hasBasetenKey = hasRealApiKey(process.env.BASETEN_API_KEY);
+    const hasMetaKey = hasRealApiKey(process.env.META_MODEL_API_KEY);
+
+    if (mode === 'REPLAY' || !hasBasetenKey) {
       try {
         const preferredPath =
           process.env.REPLAY_USE_LAST_RUN === '1' ? liveFixturePath : trackedFixturePath;
@@ -339,7 +350,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         sparkModelLabel = 'golden-fallback-plan [REPLAY_NO_FIXTURE]';
         app.log.warn(`REPLAY fixture missing, using fallback plan: ${(replayErr as Error).message}`);
       }
-    } else if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
+    } else if (mode === 'LIVE' && hasBasetenKey) {
       const sparkAbort = new AbortController();
       const sparkTimer = setTimeout(() => sparkAbort.abort(new Error('Baseten timeout > 45000ms')), 45_000);
       const onClientAbort = () => {
@@ -445,7 +456,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
-    const sam = mode === 'LIVE'
+    const sam = mode === 'LIVE' && hasMetaKey
       ? await refineMasksWithSam31(body.frameBase64, finalMasks)
       : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
 
@@ -706,7 +717,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           let usedLive = false;
           let resolution = 'SVG_FALLBACK';
           let synthesisLatencyMs = 0;
-          if (mode === 'LIVE' && process.env.META_MODEL_API_KEY) {
+          if (mode === 'LIVE' && hasMetaKey) {
             const imageStartedAt = Date.now();
             const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt, signal);
             synthesisLatencyMs = Date.now() - imageStartedAt;
@@ -766,7 +777,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         if (action.tool === 'recalculate_margins_vm') {
           let rawCode = buildDeterministicPolicyCode();
           let policyModelLabel = 'Deterministic WASM Policy';
-          if (mode === 'LIVE' && (process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY)) {
+          if (mode === 'LIVE' && (hasMetaKey || hasBasetenKey)) {
             try {
               const synth = await callMuseCodeGenerator(
                 action.targetMarginPercent,
@@ -1067,7 +1078,7 @@ app.post('/api/voice/transcribe', async (request, reply) => {
   }
 
   const mode = process.env.ORCHESTRATOR_MODE || 'LIVE';
-  if (mode === 'REPLAY' || !process.env.META_MODEL_API_KEY) {
+  if (mode === 'REPLAY' || !hasRealApiKey(process.env.META_MODEL_API_KEY)) {
     return reply.send({
       ok: true,
       transcript:
@@ -1081,8 +1092,18 @@ app.post('/api/voice/transcribe', async (request, reply) => {
   }
 
   try {
-    const catalogKeywords: string[] = [];
-    for (const item of LIVE_STORE_STATE.inventory.slice(0, 20)) {
+    const catalogKeywords: string[] = [
+      'sumá al stock',
+      'armame la foto',
+      'abrí reclamo',
+      'SSD M.2',
+      'NVMe',
+      'DDR5',
+      'cooler de torre',
+      'fuente modular',
+      'margen',
+    ];
+    for (const item of LIVE_STORE_STATE.inventory.slice(0, 18)) {
       const brandAndModel = item.name.split(/\s+/).slice(0, 2).join(' ');
       if (brandAndModel) catalogKeywords.push(brandAndModel);
     }
@@ -1206,8 +1227,8 @@ app.get('/api/health', async (_request, reply) => {
     ok: true,
     mode: process.env.ORCHESTRATOR_MODE || 'LIVE',
     mongoConnected: Boolean(db),
-    basetenConfigured: Boolean(process.env.BASETEN_API_KEY),
-    metaApiConfigured: Boolean(process.env.META_MODEL_API_KEY),
+    basetenConfigured: hasRealApiKey(process.env.BASETEN_API_KEY),
+    metaApiConfigured: hasRealApiKey(process.env.META_MODEL_API_KEY),
     voiceAsrModel: process.env.META_VOICE_MODEL || 'muse-voice-transcribe-1.0',
     telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
     sandboxEngine: 'quickjs-wasm',
