@@ -244,6 +244,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     LIVE_STORE_STATE.catalogDrafts = [];
   }
 
+  reply.hijack();
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -252,13 +253,17 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     'X-Accel-Buffering': 'no',
   });
 
+  // IMPORTANT (Node 18-23+): Do NOT listen to request.raw ('close'), because IncomingMessage emits 'close'
+  // immediately after Fastify finishes reading the 80KB POST body. Listen to reply.raw ('close') while !writableEnded.
   let streamClosed = false;
-  request.raw.on('close', () => {
-    streamClosed = true;
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableEnded) {
+      streamClosed = true;
+    }
   });
 
   const sendEvent = (event: string, payload: unknown) => {
-    if (streamClosed || reply.raw.writableEnded) return;
+    if (streamClosed || reply.raw.writableEnded || reply.raw.destroyed) return;
     reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
   };
 
@@ -325,7 +330,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     } else if (mode === 'LIVE' && process.env.BASETEN_API_KEY) {
       const sparkAbort = new AbortController();
       const sparkTimer = setTimeout(() => sparkAbort.abort(new Error('Baseten timeout > 45000ms')), 45_000);
-      request.raw.on('close', () => sparkAbort.abort(new Error('Client closed SSE stream')));
+      const onClientAbort = () => {
+        if (!reply.raw.writableEnded) {
+          sparkAbort.abort(new Error('Client closed SSE stream'));
+        }
+      };
+      reply.raw.on('close', onClientAbort);
 
       try {
         console.log('[LIVE] Calling Baseten | image:', Boolean(body.frameBase64), '| chars:', body.frameBase64?.length || 0);
@@ -372,6 +382,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         }
       } finally {
         clearTimeout(sparkTimer);
+        reply.raw.off('close', onClientAbort);
       }
     } else {
       usedFallbackPlan = true;

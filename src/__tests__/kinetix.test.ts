@@ -209,5 +209,25 @@ test('Fastify REPLAY orchestration stream executes end-to-end DAG, $50 guardrail
   const resetRes = await app.inject({ method: 'POST', url: '/api/reset-demo' });
   assert.equal(resetRes.statusCode, 200);
   assert.equal(LIVE_STORE_STATE.inventory.length, 31);
-  await app.close();
+
+  // Real TCP HTTP socket regression test (Node 23 IncomingMessage 'close' on 85KB POST body must NOT abort SSE!)
+  const address = await app.listen({ port: 0, host: '127.0.0.1' });
+  try {
+    const fake85KbPayload = 'data:image/jpeg;base64,' + 'A'.repeat(85_000);
+    const tcpRes = await fetch(`${address}/api/orchestrate-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frameBase64: fake85KbPayload,
+        voiceTranscript: 'Test TCP SSE stream with large 85KB POST body',
+      }),
+    });
+    assert.equal(tcpRes.status, 200);
+    const sseText = await tcpRes.text();
+    assert.ok(sseText.includes('event: VISION_SCAN_STARTED'), 'TCP SSE must emit VISION_SCAN_STARTED');
+    assert.ok(sseText.includes('event: SPATIAL_LOCK'), 'TCP SSE must emit SPATIAL_LOCK');
+    assert.ok(sseText.includes('event: ORCHESTRATION_COMPLETE'), 'TCP SSE must complete without premature close');
+  } finally {
+    await app.close();
+  }
 });
