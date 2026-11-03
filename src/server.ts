@@ -13,6 +13,7 @@ import {
   compileMuseImagePromptFromDna,
   planFromLiveObjects,
   computeEvidenceBasedClaimUsd,
+  tightenAndDeoverlapBoxes,
 } from './contracts/orchestratorCore';
 import {
   callBasetenMuseSparkOpen,
@@ -496,8 +497,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       ? await refineMasksWithSam31(body.frameBase64, finalMasks)
       : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
 
+    const deoverlappedSamMasks = tightenAndDeoverlapBoxes(sam.masks);
     const cropStartedAt = Date.now();
-    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, sam.masks);
+    const masksWithRealCrops = await extractRealCropsFromFrame(body.frameBase64, deoverlappedSamMasks);
     const cropLatencyMs = Math.max(1, Date.now() - cropStartedAt);
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
     const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
@@ -1036,6 +1038,7 @@ app.post('/api/triage/resolve', async (request, reply) => {
       maskId: string;
       sku: string;
       name?: string;
+      baseCostUsd?: number;
       action: 'STOCK' | 'CLAIM';
       delta?: number;
       reason?: string;
@@ -1044,10 +1047,12 @@ app.post('/api/triage/resolve', async (request, reply) => {
 
   const cleanSku = String(body.sku || '').trim().toUpperCase();
   if (!cleanSku) return reply.status(400).send({ ok: false, error: 'SKU_REQUIRED' });
+  const customBaseCost = Number(body.baseCostUsd);
+  const validCustomCost = Number.isFinite(customBaseCost) && customBaseCost > 0 ? customBaseCost : undefined;
 
   if (body.action === 'CLAIM') {
     const matched = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
-    const baseCostUsd = matched?.baseCostUsd ?? 85.0;
+    const baseCostUsd = validCustomCost ?? matched?.baseCostUsd ?? 85.0;
     const reason = body.reason || `Supervisor triage defect on ${body.name || cleanSku}`;
     const valuation = computeEvidenceBasedClaimUsd({
       baseCostUsd,
@@ -1117,13 +1122,14 @@ app.post('/api/triage/resolve', async (request, reply) => {
       // ignore cleanup error
     }
     if (!targetItem) {
+      const resolvedBase = validCustomCost ?? triageItem.baseCostUsd ?? 85.0;
       targetItem = {
         sku: cleanSku,
-        name: `${body.name || cleanSku} (Verified)`,
+        name: body.name ? body.name : `${cleanSku} (Verified)`,
         stock: triageItem.stock || delta,
         standardInboundLot: delta,
-        baseCostUsd: triageItem.baseCostUsd || 85.0,
-        sellPriceUsd: triageItem.sellPriceUsd || 123.25,
+        baseCostUsd: resolvedBase,
+        sellPriceUsd: Number((resolvedBase * 1.45).toFixed(2)),
       };
       LIVE_STORE_STATE.inventory.unshift(targetItem);
     } else {
@@ -1132,13 +1138,14 @@ app.post('/api/triage/resolve', async (request, reply) => {
   } else if (targetItem) {
     targetItem.stock += delta;
   } else {
+    const resolvedBase = validCustomCost ?? 85.0;
     targetItem = {
       sku: cleanSku,
       name: body.name || cleanSku,
       stock: delta,
       standardInboundLot: delta,
-      baseCostUsd: 85.0,
-      sellPriceUsd: 123.25,
+      baseCostUsd: resolvedBase,
+      sellPriceUsd: Number((resolvedBase * 1.45).toFixed(2)),
     };
     LIVE_STORE_STATE.inventory.unshift(targetItem);
   }

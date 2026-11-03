@@ -513,7 +513,7 @@ function boxesAreSameObject(
   const refinedArea = Math.max(0, refined[2]) * Math.max(0, refined[3]);
   if (originalArea < 0.0002 || refinedArea < 0.0002) return false;
 
-  const search = inflateBox(original, 0.65);
+  const search = inflateBox(original, 0.25);
   const centerX = refined[0] + refined[2] / 2;
   const centerY = refined[1] + refined[3] / 2;
 
@@ -526,7 +526,7 @@ function boxesAreSameObject(
   const iou = computeIoU(original, refined);
   const areaRatio = refinedArea / originalArea;
 
-  return centerInside && iou >= 0.05 && areaRatio >= 0.1 && areaRatio <= 3.0;
+  return centerInside && iou >= 0.35 && areaRatio >= 0.55 && areaRatio <= 1.55;
 }
 
 function parseSamBoxes(

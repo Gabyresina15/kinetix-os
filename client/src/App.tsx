@@ -131,6 +131,11 @@ export default function App() {
   const [vmExecution, setVmExecution] = useState<VmExecutionResult | null>(null);
   const [voiceText, setVoiceText] = useState(DEFAULT_PROMPT);
   const [reasoningTrace, setReasoningTrace] = useState('');
+  const [triageSkuChoice, setTriageSkuChoice] = useState<string>('');
+  const [triageCustomMode, setTriageCustomMode] = useState<boolean>(false);
+  const [triageNewSku, setTriageNewSku] = useState<string>('');
+  const [triageNewName, setTriageNewName] = useState<string>('');
+  const [triageNewCost, setTriageNewCost] = useState<string>('95');
 
   const { voiceStatus, toggleRecording, cancelRecording } = useMuseVoiceRecorder(
     ({ transcript, latencyMs, modelUsed, biasedKeywordsCount }) => {
@@ -653,33 +658,220 @@ export default function App() {
     const [x, y, w, h] = m.bbox;
     const isApproximate = m.confidence === undefined || m.confidence < 0.1;
     const isActive = activePulse?.id === m.id;
+    const isSelected = m.id === selectedMaskId;
 
-    let borderStyle = isApproximate ? 'border-dashed border-amber-500/80' : resolveMaskStyle(m.assignedActionStatus);
-    let extraClasses = 'transition-all duration-300';
-    let opacity = isApproximate ? 0.7 : m.confidence ? Math.max(0.4, m.confidence) : 1;
+    const statusStyle = isApproximate ? 'border-amber-500/80 text-amber-400' : resolveMaskStyle(m.assignedActionStatus);
+    const opacity = isActive ? 1 : isApproximate ? 0.75 : m.confidence ? Math.max(0.55, m.confidence) : 1;
 
-    if (isActive) {
-      borderStyle = 'border-white';
-      extraClasses =
-        'ring-4 ring-white/80 scale-[1.03] bg-white/15 z-50 transition-all duration-150 shadow-[0_0_30px_rgba(255,255,255,0.6)]';
-      opacity = 1;
-    } else if (!isApproximate && m.confidence > 0.85) {
-      extraClasses += ' shadow-[0_0_8px_currentColor]';
+    const tag = `${m.label || ''} ${m.id || ''}`.toLowerCase();
+    const isRamKit = /ram|ddr|memoria|dimm/.test(tag);
+    const isSsd = /ssd|nvme|m\.2/.test(tag);
+    const isCooler = /cooler|torre|heatsink|aleta|fan/.test(tag);
+    const isPsu = /psu|fuente|power|rm1000|atx/.test(tag);
+
+    let strokeColor = '#22d3ee';
+    let fillColor = 'rgba(34, 211, 238, 0.10)';
+    if (isSelected) {
+      strokeColor = '#fbbf24';
+      fillColor = 'rgba(251, 191, 36, 0.18)';
+    } else if (m.assignedActionStatus === 'QUARANTINED') {
+      strokeColor = '#f43f5e';
+      fillColor = 'rgba(244, 63, 94, 0.14)';
+    } else if (m.assignedActionStatus === 'STOCK_MUTATED') {
+      strokeColor = '#10b981';
+      fillColor = 'rgba(16, 185, 129, 0.13)';
+    } else if (m.assignedActionStatus === 'STUDIO_SYNTHESIZED') {
+      strokeColor = '#38bdf8';
+      fillColor = 'rgba(56, 189, 248, 0.14)';
     }
+
+    const selectMaskForTriage = () => {
+      if (m.id === selectedMaskId) {
+        setSelectedMaskId(null);
+        return;
+      }
+      setSelectedMaskId(m.id);
+      setTriageCustomMode(false);
+      setTriageSkuChoice('');
+      const cleanLbl = (m.label || m.id).replace(/\s*\[PENDING.*?\]/i, '').trim();
+      setTriageNewSku(
+        `SKU-${cleanLbl.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 18) || 'CUSTOM'}`
+      );
+      setTriageNewName(cleanLbl);
+      setTriageNewCost('95');
+    };
 
     return (
       <div
         key={m.id}
-        onClick={() => setSelectedMaskId(m.id === selectedMaskId ? null : m.id)}
-        className={`absolute border-2 ${m.id === selectedMaskId ? 'border-amber-400 bg-amber-400/20 z-40' : borderStyle} rounded-[2px] pointer-events-auto cursor-pointer ${extraClasses}`}
+        onClick={selectMaskForTriage}
+        className={`absolute pointer-events-auto cursor-pointer transition-all duration-300 ${statusStyle.replace(/bg-[^\s]+/g, '').replace(/border-[^\s]+/g, '')} ${
+          isActive ? 'scale-[1.03] z-50 drop-shadow-[0_0_20px_rgba(255,255,255,0.8)]' : isSelected ? 'z-40' : ''
+        }`}
         style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%`, opacity }}
       >
-        <div className="absolute top-0 left-0 w-2 h-2 border-t-[3px] border-l-[3px] -translate-x-[2px] -translate-y-[2px] border-current opacity-70" />
-        <div className="absolute top-0 right-0 w-2 h-2 border-t-[3px] border-r-[3px] translate-x-[2px] -translate-y-[2px] border-current opacity-70" />
-        <div className="absolute bottom-0 left-0 w-2 h-2 border-b-[3px] border-l-[3px] -translate-x-[2px] translate-y-[2px] border-current opacity-70" />
-        <div className="absolute bottom-0 right-0 w-2 h-2 border-b-[3px] border-r-[3px] translate-x-[2px] translate-y-[2px] border-current opacity-70" />
+        {/* Polygonal 3D Silhouette Overlay fitted to product geometry */}
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
+          style={{ filter: `drop-shadow(0 0 6px ${strokeColor})` }}
+        >
+          {isRamKit ? (
+            <>
+              {/* Stick #1 (Top DIMM Module) */}
+              <polygon
+                points="4,6 97,1 95,43 1,48"
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth="2.2"
+                vectorEffect="non-scaling-stroke"
+              />
+              <line
+                x1="8"
+                y1="44"
+                x2="92"
+                y2="39"
+                stroke={strokeColor}
+                strokeWidth="1"
+                strokeDasharray="3 2"
+                opacity="0.75"
+                vectorEffect="non-scaling-stroke"
+              />
+              {/* Stick #2 (Bottom DIMM Module) */}
+              <polygon
+                points="2,55 98,50 96,95 0,99"
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth="2.2"
+                vectorEffect="non-scaling-stroke"
+              />
+              <line
+                x1="6"
+                y1="95"
+                x2="93"
+                y2="91"
+                stroke={strokeColor}
+                strokeWidth="1"
+                strokeDasharray="3 2"
+                opacity="0.75"
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx="4" cy="6" r="2.2" fill={strokeColor} />
+              <circle cx="97" cy="1" r="2.2" fill={strokeColor} />
+              <circle cx="2" cy="55" r="2.2" fill={strokeColor} />
+              <circle cx="96" cy="95" r="2.2" fill={strokeColor} />
+            </>
+          ) : isSsd ? (
+            <>
+              {/* Angled M.2 2280 NVMe Blade Contour */}
+              <polygon
+                points="3,18 95,6 99,34 97,82 4,94 0,56"
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth="2.2"
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx="3" cy="18" r="2.2" fill={strokeColor} />
+              <circle cx="95" cy="6" r="2.2" fill={strokeColor} />
+              <circle cx="97" cy="82" r="2.2" fill={strokeColor} />
+              <circle cx="4" cy="94" r="2.2" fill={strokeColor} />
+            </>
+          ) : isCooler ? (
+            <>
+              {/* 3D Isometric Heatsink Tower + Fan Silhouette */}
+              <polygon
+                points="18,2 72,1 97,15 95,86 64,99 7,87 3,16"
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth="2.4"
+                vectorEffect="non-scaling-stroke"
+              />
+              <polyline
+                points="3,16 62,27 97,15"
+                fill="none"
+                stroke={strokeColor}
+                strokeWidth="1.2"
+                strokeDasharray="3 2"
+                opacity="0.75"
+                vectorEffect="non-scaling-stroke"
+              />
+              <ellipse
+                cx="34"
+                cy="56"
+                rx="22"
+                ry="27"
+                fill="none"
+                stroke={strokeColor}
+                strokeWidth="1.2"
+                strokeDasharray="4 2"
+                opacity="0.7"
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx="18" cy="2" r="2.3" fill={strokeColor} />
+              <circle cx="72" cy="1" r="2.3" fill={strokeColor} />
+              <circle cx="97" cy="15" r="2.3" fill={strokeColor} />
+              <circle cx="64" cy="99" r="2.3" fill={strokeColor} />
+            </>
+          ) : isPsu ? (
+            <>
+              {/* 3D Isometric ATX PSU Cuboid Silhouette */}
+              <polygon
+                points="14,3 88,2 99,24 97,89 74,99 2,84 1,18"
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth="2.2"
+                vectorEffect="non-scaling-stroke"
+              />
+              <polyline
+                points="1,18 73,31 99,24"
+                fill="none"
+                stroke={strokeColor}
+                strokeWidth="1.1"
+                strokeDasharray="3 2"
+                opacity="0.65"
+                vectorEffect="non-scaling-stroke"
+              />
+              <line
+                x1="73"
+                y1="31"
+                x2="74"
+                y2="99"
+                stroke={strokeColor}
+                strokeWidth="1.1"
+                strokeDasharray="3 2"
+                opacity="0.65"
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx="14" cy="3" r="2.2" fill={strokeColor} />
+              <circle cx="88" cy="2" r="2.2" fill={strokeColor} />
+              <circle cx="99" cy="24" r="2.2" fill={strokeColor} />
+              <circle cx="74" cy="99" r="2.2" fill={strokeColor} />
+            </>
+          ) : (
+            <polygon
+              points="7,2 93,2 98,12 98,88 93,98 7,98 2,88 2,12"
+              fill={fillColor}
+              stroke={strokeColor}
+              strokeWidth="2.2"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
 
-        <div className="absolute -top-6 left-0 text-[10px] bg-slate-950/90 border border-slate-700/50 px-1.5 py-0.5 rounded text-slate-100 whitespace-nowrap font-medium tracking-wide shadow-lg">
+        {/* Sub-module micro-badges for individual RAM sticks */}
+        {isRamKit && (
+          <>
+            <span className="absolute right-1 top-[10%] text-[7px] font-mono font-bold px-1 rounded bg-slate-950/90 text-emerald-300 border border-emerald-500/40 pointer-events-none">
+              DIMM #1
+            </span>
+            <span className="absolute right-1 top-[62%] text-[7px] font-mono font-bold px-1 rounded bg-slate-950/90 text-emerald-300 border border-emerald-500/40 pointer-events-none">
+              DIMM #2
+            </span>
+          </>
+        )}
+
+        <div className="absolute -top-6 left-0 text-[10px] bg-slate-950/95 border border-slate-700/70 px-1.5 py-0.5 rounded text-slate-100 whitespace-nowrap font-medium tracking-wide shadow-lg">
           {m.label || m.id}{' '}
           {isApproximate ? (
             <span className="text-amber-400 font-bold ml-1">[ APPROX ]</span>
@@ -889,11 +1081,53 @@ export default function App() {
                 const rawLabel = (selectedMask?.label || selectedMaskId)
                   .replace(/\s*\[PENDING.*?\]/i, '')
                   .trim();
-                const suggestedSku = `SKU-${rawLabel.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 18) || 'ASSET'}`;
+                const fallbackSlugSku = `SKU-${rawLabel.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 18) || 'ASSET'}`;
                 const hasPendingTriage = inventory.some((item) => item.sku.startsWith('SKU-TRIAGE-'));
 
+                const catalogItems = inventory.filter(
+                  (it) => it.sku !== 'LOADING' && !it.sku.startsWith('SKU-TRIAGE-')
+                );
+                const needleText = `${rawLabel} ${selectedMaskId}`.toLowerCase();
+                const isRamMask = /ram|ddr|memoria|dimm|2x16|2x32|kit/.test(needleText);
+                const isSsdMask = /ssd|nvme|m\.2|pcie|gen4|gen5|sata/.test(needleText);
+                const isCoolerMask = /cooler|torre|heatsink|aio|fan|ventil|aleta/.test(needleText);
+                const isPsuMask = /psu|fuente|power|rm1000|atx|modular|watt/.test(needleText);
+                const isGpuMask = /gpu|rtx|radeon|rx|placa/.test(needleText);
+                const isCpuMask = /cpu|ryzen|intel|core/.test(needleText);
+
+                const scoredCatalog = catalogItems
+                  .map((item) => {
+                    const hay = `${item.sku} ${item.name}`.toLowerCase();
+                    let score = 0;
+                    if (isRamMask && /ddr|ram|fury|vengeance|trident/.test(hay)) score += 50;
+                    if (isSsdMask && /nvme|ssd|m\.2|sata/.test(hay)) score += 50;
+                    if (isCoolerMask && /cooler|tower|aio|liquid|fan/.test(hay)) score += 50;
+                    if (isPsuMask && /psu|modular|gold|platinum|atx3|watt|1000w|850w/.test(hay)) score += 50;
+                    if (isGpuMask && /rtx|rx|gpu|geforce|radeon/.test(hay)) score += 50;
+                    if (isCpuMask && /ryzen|intel|core/.test(hay)) score += 50;
+                    for (const tok of needleText.split(/[^a-z0-9]+/).filter((w) => w.length >= 2)) {
+                      if (hay.includes(tok)) score += 15;
+                    }
+                    return { item, score };
+                  })
+                  .sort((a, b) => b.score - a.score);
+
+                const topCandidates = scoredCatalog.slice(0, 3).map((s) => s.item);
+                const activeSku = triageCustomMode
+                  ? (triageNewSku || fallbackSlugSku).trim().toUpperCase()
+                  : triageSkuChoice || topCandidates[0]?.sku || fallbackSlugSku;
+                const activeCatalogItem = catalogItems.find((i) => i.sku === activeSku);
+                const resolvedProductName = triageCustomMode
+                  ? triageNewName.trim() || rawLabel
+                  : activeCatalogItem?.name || rawLabel;
+                const resolvedBaseCost = triageCustomMode
+                  ? Number(triageNewCost) > 0
+                    ? Number(triageNewCost)
+                    : 95
+                  : activeCatalogItem?.baseCostUsd;
+
                 const commitStockWithSku = async (finalSku: string) => {
-                  const cleanSku = finalSku.trim().toUpperCase() || suggestedSku;
+                  const cleanSku = finalSku.trim().toUpperCase() || activeSku;
                   try {
                     const res = await fetch(apiUrl('/api/triage/resolve'), {
                       method: 'POST',
@@ -901,9 +1135,10 @@ export default function App() {
                       body: JSON.stringify({
                         maskId: selectedMaskId,
                         sku: cleanSku,
-                        name: rawLabel,
+                        name: resolvedProductName,
+                        baseCostUsd: resolvedBaseCost,
                         action: 'STOCK',
-                        delta: 1,
+                        delta: isRamMask && !hasPendingTriage ? 2 : 1,
                       }),
                     });
                     const data = await res.json();
@@ -911,7 +1146,10 @@ export default function App() {
                       setInventory(
                         data.inventory.map((it: InventoryItem) =>
                           it.sku === cleanSku
-                            ? { ...it, _highlightDelta: hasPendingTriage ? 'CLEARED' : '+1' }
+                            ? {
+                                ...it,
+                                _highlightDelta: hasPendingTriage ? 'CLEARED' : isRamMask ? '+2' : '+1',
+                              }
                             : it
                         )
                       );
@@ -922,9 +1160,12 @@ export default function App() {
                   }
                   updateStep('mutate_inventory', {
                     status: 'MUTATED',
-                    detail: `Supervisor confirmed ${cleanSku} (+1)`,
+                    detail: `Supervisor confirmed ${cleanSku} (${resolvedProductName})`,
                   });
-                  setActivePulse({ id: selectedMaskId, actionText: hasPendingTriage ? 'CLEARED' : '+1 STOCK' });
+                  setActivePulse({
+                    id: selectedMaskId,
+                    actionText: hasPendingTriage ? 'CLEARED' : isRamMask ? '+2 STOCK' : '+1 STOCK',
+                  });
                   setMasks((prev) =>
                     prev.map((m) =>
                       m.id === selectedMaskId
@@ -933,17 +1174,12 @@ export default function App() {
                     )
                   );
                   setTimeout(() => setActivePulse(null), 350);
-                  setTimeout(() => {
-                    setInventory((curr) =>
-                      curr.map((item) => (item.sku === cleanSku ? { ...item, _highlightDelta: undefined } : item))
-                    );
-                  }, 2000);
                   setSelectedMaskId(null);
                 };
 
                 return (
-                  <div className="absolute bottom-4 right-4 bg-slate-950/95 border border-amber-500/60 rounded-lg p-3 w-72 shadow-[0_0_25px_rgba(0,0,0,0.85)] backdrop-blur-sm z-50 animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-start mb-2 border-b border-slate-800 pb-2">
+                  <div className="absolute bottom-3 right-3 bg-slate-950/95 border border-amber-500/60 rounded-lg p-3 w-80 shadow-[0_0_30px_rgba(0,0,0,0.9)] backdrop-blur-md z-50 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-start mb-2 border-b border-slate-800 pb-1.5">
                       <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
                         <Scan className="w-3 h-3" /> SUPERVISOR TRIAGE & OVERRIDE
                       </span>
@@ -962,42 +1198,131 @@ export default function App() {
                       </span>
                     </div>
 
-                    <div className="mb-2.5">
-                      <label className="block text-[8px] uppercase tracking-wider text-slate-400 font-bold mb-1">
-                        AI Suggested SKU (Press Enter to Confirm)
-                      </label>
-                      <input
-                        key={selectedMaskId}
-                        id="supervisor-sku-input"
-                        type="text"
-                        defaultValue={suggestedSku}
-                        className="w-full bg-slate-900 border border-amber-500/50 rounded px-2 py-1 text-[10px] font-mono text-amber-200 focus:outline-none focus:border-cyan-400"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void commitStockWithSku(e.currentTarget.value);
-                        }}
-                      />
+                    {/* Mode switcher: Catalog Matches vs + Add New SKU */}
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">
+                        {triageCustomMode ? 'CREATE NEW CATALOG SKU' : 'AI SUGGESTED CATALOG SKUS'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setTriageCustomMode((prev) => !prev)}
+                        className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border cursor-pointer transition-colors ${
+                          triageCustomMode
+                            ? 'border-cyan-500/50 bg-cyan-950/40 text-cyan-300'
+                            : 'border-amber-500/50 bg-amber-950/40 text-amber-300 hover:bg-amber-900/50'
+                        }`}
+                      >
+                        {triageCustomMode ? '← PICK FROM CATALOG' : '+ NEW SKU NOT IN LIST'}
+                      </button>
                     </div>
+
+                    {!triageCustomMode ? (
+                      <div className="space-y-1.5 mb-2.5">
+                        <div className="space-y-1 max-h-32 overflow-y-auto pr-0.5">
+                          {topCandidates.map((cand, idx) => {
+                            const selected = cand.sku === activeSku;
+                            return (
+                              <button
+                                key={cand.sku}
+                                type="button"
+                                onClick={() => setTriageSkuChoice(cand.sku)}
+                                className={`w-full text-left px-2 py-1.5 rounded border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                  selected
+                                    ? 'border-amber-400 bg-amber-950/35 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)]'
+                                    : 'border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-600'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-[10px] font-bold truncate flex items-center gap-1">
+                                    {idx === 0 && (
+                                      <span className="text-[7px] px-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
+                                        TOP
+                                      </span>
+                                    )}
+                                    <span className="truncate">{cand.name}</span>
+                                  </div>
+                                  <div className="text-[8.5px] font-mono text-slate-400 truncate">
+                                    {cand.sku} · Base ${cand.baseCostUsd.toFixed(0)} · Stock {cand.stock}u
+                                  </div>
+                                </div>
+                                <span className="text-[9.5px] font-mono font-bold text-emerald-400 shrink-0">
+                                  ${cand.sellPriceUsd.toFixed(2)}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <select
+                          value={activeSku}
+                          onChange={(e) => setTriageSkuChoice(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[9.5px] font-mono text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer"
+                        >
+                          {catalogItems.map((it) => (
+                            <option key={it.sku} value={it.sku}>
+                              {it.sku} — {it.name} (${it.sellPriceUsd.toFixed(2)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 mb-2.5 bg-slate-900/70 border border-slate-800 rounded p-2">
+                        <div>
+                          <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                            New SKU Code
+                          </label>
+                          <input
+                            type="text"
+                            value={triageNewSku}
+                            onChange={(e) => setTriageNewSku(e.target.value.toUpperCase())}
+                            placeholder="SKU-BRAND-MODEL"
+                            className="w-full bg-slate-950 border border-amber-500/50 rounded px-2 py-1 text-[9.5px] font-mono text-amber-200 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <div className="col-span-2">
+                            <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                              Brand & Full Model
+                            </label>
+                            <input
+                              type="text"
+                              value={triageNewName}
+                              onChange={(e) => setTriageNewName(e.target.value)}
+                              placeholder="e.g. Kingston Fury DDR5 32GB"
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[9.5px] text-slate-200 focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                              Cost ($ USD)
+                            </label>
+                            <input
+                              type="number"
+                              value={triageNewCost}
+                              onChange={(e) => setTriageNewCost(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[9.5px] font-mono text-emerald-300 focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-1.5">
                       <button
-                        onClick={() => {
-                          const inputEl = document.getElementById(
-                            'supervisor-sku-input'
-                          ) as HTMLInputElement | null;
-                          void commitStockWithSku(inputEl?.value || suggestedSku);
-                        }}
+                        onClick={() => void commitStockWithSku(activeSku)}
                         className="w-full py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700 rounded text-[10px] font-bold text-emerald-300 uppercase tracking-widest transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         <Package className="w-3 h-3" />{' '}
-                        {hasPendingTriage ? 'CONFIRM & CLEAR TRIAGE' : 'CONFIRM & ADD +1 STOCK'}
+                        {triageCustomMode
+                          ? 'CREATE SKU & ADD STOCK'
+                          : hasPendingTriage
+                          ? 'CONFIRM & CLEAR TRIAGE'
+                          : `CONFIRM ${activeSku} (+${isRamMask ? 2 : 1})`}
                       </button>
 
                       <button
                         onClick={async () => {
-                          const inputEl = document.getElementById(
-                            'supervisor-sku-input'
-                          ) as HTMLInputElement | null;
-                          const confirmedSku = (inputEl?.value || suggestedSku).trim().toUpperCase();
+                          const confirmedSku = activeSku;
                           try {
                             const res = await fetch(apiUrl('/api/triage/resolve'), {
                               method: 'POST',
@@ -1005,9 +1330,10 @@ export default function App() {
                               body: JSON.stringify({
                                 maskId: selectedMaskId,
                                 sku: confirmedSku,
-                                name: rawLabel,
+                                name: resolvedProductName,
+                                baseCostUsd: resolvedBaseCost,
                                 action: 'CLAIM',
-                                reason: `Defecto verificado en triaje sobre ${rawLabel} (${confirmedSku})`,
+                                reason: `Defecto verificado en triaje sobre ${resolvedProductName} (${confirmedSku})`,
                                 cropBase64: selectedMask?.cropBase64,
                               }),
                             });

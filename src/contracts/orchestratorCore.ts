@@ -384,12 +384,8 @@ export function tightenAndDeoverlapBoxes<
       const overlapX = Math.min(aRight, bRight) - Math.max(a[0], b[0]);
       const overlapY = Math.min(aBottom, bBottom) - Math.max(a[1], b[1]);
 
-      if (overlapX > 0 && overlapY > 0) {
-        const areaA = a[2] * a[3];
-        const areaB = b[2] * b[3];
-        if (areaA > areaB && a[0] < b[0] && b[0] - a[0] >= 0.04) {
-          a[2] = Number((b[0] - a[0] - 0.008).toFixed(3));
-        }
+      if (overlapX > 0 && overlapY > 0 && a[0] < b[0] && b[0] - a[0] >= 0.03) {
+        a[2] = Number(Math.max(0.03, b[0] - a[0] - 0.008).toFixed(3));
       }
     }
   }
