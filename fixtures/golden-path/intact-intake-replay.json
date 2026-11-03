@@ -1,0 +1,75 @@
+{
+  "timestamp": "2026-11-03T17:05:12.110Z",
+  "scenario": "INTACT_BATCH_INTAKE_ZERO_CLAIM",
+  "liveSpark": {
+    "plan": {
+      "summary": "Recepción de lote intacto verificada ($0.00 USD de reclamo — 0 defectos estructurales): +1 Tower Cooler (SKU-AIR-SINGLE-TOWER), +2 kits RAM DDR5 (SKU-DDR5-64GB-KIT), +1 SSD M.2 NVMe (SKU-NVME-4TB-GEN4) y recálculo de márgenes al 32%.",
+      "detectedObjects": [
+        {
+          "id": "mask_tower_cooler",
+          "label": "Tower Cooler (Intact)",
+          "bbox": [0.43, 0.505, 0.14, 0.255],
+          "confidence": 0.98,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_ram_kit",
+          "label": "RAM Kit 2x",
+          "bbox": [0.178, 0.71, 0.134, 0.155],
+          "confidence": 0.96,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_ssd_m2",
+          "label": "M.2 SSD",
+          "bbox": [0.342, 0.782, 0.086, 0.043],
+          "confidence": 0.95,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_psu_modular",
+          "label": "Modular PSU",
+          "bbox": [0.814, 0.628, 0.144, 0.184],
+          "confidence": 0.97,
+          "isSensitivePII": false
+        }
+      ],
+      "requiresHumanConfirmation": false,
+      "actions": [
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_tower_cooler",
+          "sku": "SKU-AIR-SINGLE-TOWER",
+          "itemName": "Tower Cooler 120mm Copper Heatpipes",
+          "delta": 1,
+          "unitCostUsd": 78
+        },
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_ram_kit",
+          "sku": "SKU-DDR5-64GB-KIT",
+          "itemName": "Corsair Vengeance RGB DDR5 64GB (2x32GB)",
+          "delta": 2,
+          "unitCostUsd": 160
+        },
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_ssd_m2",
+          "sku": "SKU-NVME-4TB-GEN4",
+          "itemName": "Samsung 990 PRO NVMe M.2 4TB",
+          "delta": 1,
+          "unitCostUsd": 250
+        },
+        {
+          "tool": "recalculate_margins_vm",
+          "targetMarginPercent": 32,
+          "taxRatePercent": 21
+        }
+      ]
+    },
+    "reasoningTrace": "Inspected all 4 workbench hardware units: mask_tower_cooler (SKU-AIR-SINGLE-TOWER, baseCostUsd=$78.00) shows intact fins and uncrushed heatpipes (defectSeverity=INTACT, damageFactor=0.0, claimAmountUsd=$0.00 -> $50 USD guardrail NOT triggered). Executing Stage 1 stock intake (+1 cooler, +2 DDR5 kits, +1 NVMe SSD) followed by Stage 2 32% margin + 21% tax repricing.",
+    "modelUsed": "meta-models/muse-spark-open-1026 (Baseten 2M TPM)",
+    "firstTokenLatencyMs": 1120,
+    "latencyMs": 9410
+  }
+}

@@ -4,10 +4,11 @@ dist/
 client/dist/
 .env
 *.log
+*.tsbuildinfo
 fixtures/golden-path/*.json
 !fixtures/golden-path/golden-spark-replay.json
 !fixtures/golden-path/last-baseten-spark-run.json
+!fixtures/golden-path/intact-intake-replay.json
+!fixtures/golden-path/damaged-claim-replay.json
 !fixtures/golden-path/triage-ambiguous-replay.json
 data/ledger/
-
-*.tsbuildinfo

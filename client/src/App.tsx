@@ -1111,6 +1111,45 @@ export default function App() {
                 </button>
               </div>
             ) : null}
+            <div className="mb-1.5 flex items-center gap-1.5 flex-wrap">
+              <span className="text-[8px] font-mono uppercase tracking-wider text-slate-500">PRESETS:</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setVoiceText(
+                    'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock los dos módulos RAM y el SSD M.2 y recalculá precios con 32% de margen.'
+                  )
+                }
+                className="px-1.5 py-0.5 rounded border border-rose-500/40 bg-rose-950/30 hover:bg-rose-900/50 text-[8px] font-mono font-bold text-rose-300 cursor-pointer transition-colors"
+                title="Scenario 1: Critical structural fin damage on $78 cooler -> $66.30 claim (>= $50 USD Guardrail Hold)"
+              >
+                [1] CRITICAL DAMAGE ($66.30 HOLD)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setVoiceText(
+                    'Todos los componentes llegaron intactos sin daño; sumá al stock el cooler de torre, los dos módulos RAM y el SSD M.2 y recalculá márgenes al 32%.'
+                  )
+                }
+                className="px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/50 text-[8px] font-mono font-bold text-emerald-300 cursor-pointer transition-colors"
+                title="Scenario 2: All items intact -> $0.00 claim (No $50 USD Guardrail Hold)"
+              >
+                [2] INTACT INTAKE ($0.00 CLAIM)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setVoiceText(
+                    'Módulo M.2 con etiqueta oculta para triage visual y generá foto de catálogo 512x512 para la fuente modular.'
+                  )
+                }
+                className="px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-950/30 hover:bg-amber-900/50 text-[8px] font-mono font-bold text-amber-300 cursor-pointer transition-colors"
+                title="Scenario 3: Ambiguous barcode routed to SKU-TRIAGE-PENDING + 512x512 Muse Image synthesis"
+              >
+                [3] OCCLUDED SKU TRIAGE (512x512)
+              </button>
+            </div>
             <textarea
               value={voiceText}
               onChange={(e) => setVoiceText(e.target.value)}

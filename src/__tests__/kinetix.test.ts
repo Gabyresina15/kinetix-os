@@ -372,6 +372,38 @@ test('Fastify REPLAY orchestration stream, stage-based concurrent DAG, dynamic $
   assert.equal(LIVE_STORE_STATE.inventory.length, 31);
   assert.equal(verifyAuditChainIntegrity().blockCount, 0);
 
+  // Verify intact-intake-replay.json scenario produces $0.00 claim (0 held claims) and increments cooler stock
+  const intactRes = await app.inject({
+    method: 'POST',
+    url: '/api/orchestrate-stream',
+    payload: {
+      voiceTranscript:
+        'Todos los componentes llegaron intactos sin daño; sumá al stock el cooler de torre, los dos módulos RAM y el SSD M.2 y recalculá márgenes al 32%.',
+    },
+  });
+  assert.equal(intactRes.statusCode, 200);
+  assert.equal(LIVE_STORE_STATE.claims.length, 0, 'Intact intake must not generate any supplier claim or $50 hold');
+  assert.equal(
+    LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-AIR-SINGLE-TOWER')?.stock,
+    35, // 34 + 1
+    'Intact cooler stock must increment by +1'
+  );
+
+  // Verify triage-ambiguous-replay.json scenario routes ambiguous module to SKU-TRIAGE-PENDING
+  const triageStreamRes = await app.inject({
+    method: 'POST',
+    url: '/api/orchestrate-stream',
+    payload: {
+      voiceTranscript:
+        'Módulo M.2 con etiqueta oculta para triage visual y generá foto de catálogo 512x512 para la fuente modular.',
+    },
+  });
+  assert.equal(triageStreamRes.statusCode, 200);
+  assert.ok(
+    LIVE_STORE_STATE.inventory.some((i) => i.sku === 'SKU-TRIAGE-PENDING'),
+    'Ambiguous item must be routed to SKU-TRIAGE-PENDING for 1-click supervisor triage'
+  );
+
   // Real TCP HTTP socket regression test (Node 23 IncomingMessage 'close' on 85KB POST body must NOT abort SSE!)
   const address = await app.listen({ port: 0, host: '127.0.0.1' });
   try {

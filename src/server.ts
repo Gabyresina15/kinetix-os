@@ -340,14 +340,29 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
     const liveFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'last-baseten-spark-run.json');
     const trackedFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'golden-spark-replay.json');
+    const intactFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'intact-intake-replay.json');
+    const triageFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'triage-ambiguous-replay.json');
+    const damagedFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'damaged-claim-replay.json');
 
     const hasBasetenKey = hasRealApiKey(process.env.BASETEN_API_KEY);
     const hasMetaKey = hasRealApiKey(process.env.META_MODEL_API_KEY);
 
     if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
-        const preferredPath =
-          process.env.REPLAY_USE_LAST_RUN === '1' ? liveFixturePath : trackedFixturePath;
+        const isIntactTranscript =
+          /\b(intact|intacto|intactos|sin da[ñn]o|zero claim)\b/i.test(voiceTranscript) &&
+          !/\b(aleta|golpead|bent|reclamo)\b/i.test(voiceTranscript);
+        const isTriageOnlyTranscript =
+          /\b(triage|etiqueta oculta|ambiguous|ambiguo)\b/i.test(voiceTranscript) &&
+          !/\b(aleta|golpead|bent)\b/i.test(voiceTranscript);
+
+        const preferredPath = isIntactTranscript
+          ? intactFixturePath
+          : isTriageOnlyTranscript
+          ? triageFixturePath
+          : process.env.REPLAY_USE_LAST_RUN === '1'
+          ? liveFixturePath
+          : damagedFixturePath;
         const secondaryPath =
           process.env.REPLAY_USE_LAST_RUN === '1' ? trackedFixturePath : liveFixturePath;
         let rawText: string;
