@@ -50,8 +50,8 @@ export const INITIAL_CATALOG: readonly CatalogSeedItem[] = [
   // Cooling (AIO & Air Tower Coolers)
   { sku: 'SKU-AIO-360MM', name: 'NZXT Kraken Elite 360 RGB AIO', stock: 14, standardInboundLot: 5, baseCostUsd: 190.0, sellPriceUsd: 279.99 },
   { sku: 'SKU-AIO-240MM', name: 'Cooler Master MasterLiquid ML240L', stock: 42, standardInboundLot: 10, baseCostUsd: 60.0, sellPriceUsd: 89.99 },
-  { sku: 'SKU-AIR-DUAL-TOWER', name: 'Noctua NH-D15 chromax.black', stock: 26, standardInboundLot: 10, baseCostUsd: 85.0, sellPriceUsd: 119.99 },
-  { sku: 'SKU-AIR-SINGLE-TOWER', name: 'Tower Cooler 120mm Copper Heatpipes', stock: 120, standardInboundLot: 40, baseCostUsd: 22.0, sellPriceUsd: 39.99 },
+  { sku: 'SKU-AIR-DUAL-TOWER', name: 'Noctua NH-D15 chromax.black', stock: 26, standardInboundLot: 10, baseCostUsd: 95.0, sellPriceUsd: 139.99 },
+  { sku: 'SKU-AIR-SINGLE-TOWER', name: 'Tower Cooler 120mm Copper Heatpipes', stock: 34, standardInboundLot: 10, baseCostUsd: 78.0, sellPriceUsd: 114.99 },
 ];
 
 export function cloneInitialCatalog(): CatalogSeedItem[] {

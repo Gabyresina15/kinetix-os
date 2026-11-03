@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import { getQuickJS, shouldInterruptAfterDeadline, type QuickJSWASMModule } from 'quickjs-emscripten';
 
 export interface PricingContextInput {
@@ -12,7 +13,7 @@ export interface WasmPricingExecutionResult {
   finalPrice: number;
   cleanCodeShownInUI: string;
   usedFallback: boolean;
-  sandboxEngine: 'quickjs-wasm';
+  sandboxEngine: 'quickjs-wasm' | 'node:vm-50ms';
   invariantsPassed: boolean;
   rejectionReason?: string;
 }
@@ -55,6 +56,123 @@ function sanitizeGeneratedJs(rawLLMCode: string): string {
   return body;
 }
 
+function validatePolicyOutputInvariants(
+  parsed: { price: number; higherCostPrice: number; hostLeak: boolean },
+  safeCost: number
+): void {
+  if (parsed.hostLeak) {
+    throw new Error('Sandbox isolation violation detected');
+  }
+  if (!Number.isFinite(parsed.price) || parsed.price <= safeCost) {
+    throw new Error(`Invariant failed: price (${parsed.price}) must be finite and exceed unit cost (${safeCost})`);
+  }
+  if (parsed.price > safeCost * 4.5) {
+    throw new Error(`Invariant failed: price (${parsed.price}) exceeds 4.5x anti-gouging ceiling`);
+  }
+  if (!Number.isFinite(parsed.higherCostPrice) || parsed.higherCostPrice <= parsed.price) {
+    throw new Error('Invariant failed: policy is non-monotonic with respect to unit cost');
+  }
+}
+
+export function executeBoundedNodeVmPolicy(
+  rawLLMCode: string,
+  input: PricingContextInput
+): WasmPricingExecutionResult {
+  const strippedBody = sanitizeGeneratedJs(rawLLMCode);
+  const fallbackPrice = computeDeterministicFallbackPrice(input);
+  const fallbackSnippet = buildDeterministicPolicyCode();
+
+  if (!strippedBody || !strippedBody.includes('calculatePrice')) {
+    return {
+      finalPrice: fallbackPrice,
+      cleanCodeShownInUI: fallbackSnippet,
+      usedFallback: true,
+      sandboxEngine: 'node:vm-50ms',
+      invariantsPassed: true,
+      rejectionReason: 'Missing calculatePrice entrypoint',
+    };
+  }
+
+  const safeCost = Number(input.baseCost);
+  const safeMargin = Math.min(85, Math.max(1, Number(input.targetMarginPct)));
+  const safeTax = Math.min(50, Math.max(0, Number(input.taxPct)));
+  const safeStock = Number.isFinite(input.currentStock) ? Number(input.currentStock) : 50;
+  const safeDelta = Number.isFinite(input.inboundDelta) ? Number(input.inboundDelta) : 0;
+
+  const baseCtx = {
+    cost: safeCost,
+    marginPct: safeMargin,
+    taxPct: safeTax,
+    stock: safeStock,
+    inboundDelta: safeDelta,
+  };
+
+  try {
+    const sandbox = Object.create(null) as Record<string, unknown>;
+    sandbox.Number = Number;
+    sandbox.Math = Math;
+    sandbox.Object = Object;
+    sandbox.JSON = JSON;
+    sandbox.__baseCtx = Object.freeze({ ...baseCtx });
+
+    const vmContext = vm.createContext(sandbox, {
+      codeGeneration: { strings: false, wasm: false },
+    });
+
+    const script = new vm.Script(
+      `"use strict";
+      ${strippedBody}
+      function __invoke(c) {
+        if (typeof calculatePrice !== 'function') throw new Error('calculatePrice is not a function');
+        const out = calculatePrice.length >= 2
+          ? calculatePrice(c.cost, c.marginPct, c.taxPct, c.stock, c.inboundDelta)
+          : calculatePrice(c);
+        return Number(out);
+      }
+      const __p1 = __invoke(__baseCtx);
+      const __pHigher = __invoke({
+        cost: __baseCtx.cost * 1.2,
+        marginPct: __baseCtx.marginPct,
+        taxPct: __baseCtx.taxPct,
+        stock: __baseCtx.stock,
+        inboundDelta: __baseCtx.inboundDelta
+      });
+      const __leak = (typeof process !== 'undefined') || (typeof require !== 'undefined');
+      JSON.stringify({ price: Number(__p1.toFixed(2)), higherCostPrice: Number(__pHigher.toFixed(2)), hostLeak: __leak });`
+    );
+
+    const rawJson = String(
+      script.runInContext(vmContext, {
+        timeout: 50,
+      })
+    );
+    const parsed = JSON.parse(rawJson) as {
+      price: number;
+      higherCostPrice: number;
+      hostLeak: boolean;
+    };
+    validatePolicyOutputInvariants(parsed, safeCost);
+
+    return {
+      finalPrice: parsed.price,
+      cleanCodeShownInUI: strippedBody,
+      usedFallback: false,
+      sandboxEngine: 'node:vm-50ms',
+      invariantsPassed: true,
+    };
+  } catch (err) {
+    return {
+      finalPrice: fallbackPrice,
+      cleanCodeShownInUI: fallbackSnippet,
+      usedFallback: true,
+      sandboxEngine: 'node:vm-50ms',
+      invariantsPassed: true,
+      rejectionReason: (err as Error).message,
+    };
+  }
+}
+
+// Bounded 50ms isolated execution sandbox (QuickJS WebAssembly primary + 50ms node:vm verifier with deterministic fallback)
 export async function executeWasmPricingSandbox(
   rawLLMCode: string,
   input: PricingContextInput
@@ -74,6 +192,20 @@ export async function executeWasmPricingSandbox(
     };
   }
 
+  const safeCost = Number(input.baseCost);
+  const safeMargin = Math.min(85, Math.max(1, Number(input.targetMarginPct)));
+  const safeTax = Math.min(50, Math.max(0, Number(input.taxPct)));
+  const safeStock = Number.isFinite(input.currentStock) ? Number(input.currentStock) : 50;
+  const safeDelta = Number.isFinite(input.inboundDelta) ? Number(input.inboundDelta) : 0;
+
+  const baseCtx = {
+    cost: safeCost,
+    marginPct: safeMargin,
+    taxPct: safeTax,
+    stock: safeStock,
+    inboundDelta: safeDelta,
+  };
+
   const QuickJS = await loadQuickJsModule();
   const runtime = QuickJS.newRuntime();
   runtime.setMemoryLimit(4 * 1024 * 1024); // 4 MB WASM linear memory ceiling
@@ -82,12 +214,6 @@ export async function executeWasmPricingSandbox(
 
   const ctx = runtime.newContext();
   try {
-    const safeCost = Number(input.baseCost);
-    const safeMargin = Math.min(85, Math.max(1, Number(input.targetMarginPct)));
-    const safeTax = Math.min(50, Math.max(0, Number(input.taxPct)));
-    const safeStock = Number.isFinite(input.currentStock) ? Number(input.currentStock) : 50;
-    const safeDelta = Number.isFinite(input.inboundDelta) ? Number(input.inboundDelta) : 0;
-
     const harnessScript = `
       "use strict";
       ${strippedBody}
@@ -96,20 +222,13 @@ export async function executeWasmPricingSandbox(
         if (typeof calculatePrice !== 'function') {
           throw new Error('calculatePrice is not a function');
         }
-        // Support both object-context signature calculatePrice(ctx) and positional calculatePrice(cost, marginPct, taxPct)
         const out = calculatePrice.length >= 2
           ? calculatePrice(c.cost, c.marginPct, c.taxPct, c.stock, c.inboundDelta)
           : calculatePrice(c);
         return Number(out);
       }
 
-      const __baseCtx = ${JSON.stringify({
-        cost: safeCost,
-        marginPct: safeMargin,
-        taxPct: safeTax,
-        stock: safeStock,
-        inboundDelta: safeDelta,
-      })};
+      const __baseCtx = ${JSON.stringify(baseCtx)};
 
       const __p1 = __invokePolicy(__baseCtx);
       const __pHigherCost = __invokePolicy(Object.assign({}, __baseCtx, { cost: __baseCtx.cost * 1.2 }));
@@ -137,18 +256,7 @@ export async function executeWasmPricingSandbox(
       hostLeak: boolean;
     };
 
-    if (parsed.hostLeak) {
-      throw new Error('Sandbox isolation violation detected');
-    }
-    if (!Number.isFinite(parsed.price) || parsed.price <= safeCost) {
-      throw new Error(`Invariant failed: price (${parsed.price}) must exceed unit cost (${safeCost})`);
-    }
-    if (parsed.price > safeCost * 4.5) {
-      throw new Error(`Invariant failed: price (${parsed.price}) exceeds 4.5x anti-gouging ceiling`);
-    }
-    if (!Number.isFinite(parsed.higherCostPrice) || parsed.higherCostPrice <= parsed.price) {
-      throw new Error('Invariant failed: policy is non-monotonic with respect to unit cost');
-    }
+    validatePolicyOutputInvariants(parsed, safeCost);
 
     return {
       finalPrice: parsed.price,

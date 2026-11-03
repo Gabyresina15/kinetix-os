@@ -1,7 +1,13 @@
 node_modules/
+client/node_modules/
 dist/
+client/dist/
 .env
 *.log
 fixtures/golden-path/*.json
 !fixtures/golden-path/golden-spark-replay.json
+!fixtures/golden-path/last-baseten-spark-run.json
+!fixtures/golden-path/triage-ambiguous-replay.json
 data/ledger/
+
+*.tsbuildinfo

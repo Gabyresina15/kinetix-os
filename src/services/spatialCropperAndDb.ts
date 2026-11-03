@@ -37,7 +37,7 @@ export async function getPersistenceDb(): Promise<any> {
   if (Date.now() < mongoUnavailableUntil) return null;
   try {
     const { MongoClient } = await import('mongodb');
-    const uri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/kinetix_erp';
+    const uri = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/kinetix_erp';
     const client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
     await client.connect();
     const dbName = resolveMongoDbName(uri);
@@ -222,10 +222,12 @@ export function sanitizeReasoningToTelemetry(
         lines.push(
           `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)}${where} -> quarantine_and_claim: "${a.defectReason}".`
         );
-        const amount = Number(a.claimAmountUsd);
+        const amount = Number(a.claimAmountUsd ?? 0);
+        const factor = Number(a.damageFactor ?? 0.85);
+        const sev = a.defectSeverity || 'CRITICAL';
         const held = amount >= 50;
         lines.push(
-          `[GUARDRAIL_AUDIT] Claim -$${amount.toFixed(2)} USD -> ${held ? 'HELD_BY_GUARDRAIL (>= $50.00 USD operator approval required)' : 'AUTO_APPROVED (< $50.00 USD)'}.`
+          `[GUARDRAIL_AUDIT] Severity=${sev} (factor=${factor.toFixed(2)}) -> Claim -$${amount.toFixed(2)} USD -> ${held ? 'HELD_BY_GUARDRAIL (>= $50.00 USD operator approval required)' : 'AUTO_APPROVED (< $50.00 USD)'}.`
         );
         break;
       }
@@ -238,7 +240,7 @@ export function sanitizeReasoningToTelemetry(
       }
       case 'generate_studio_catalog': {
         lines.push(
-          `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)} -> generate_studio_catalog: "${a.productTitle}".`
+          `[SEMANTIC_BINDING] ${nameOf(a.targetMaskId)} -> generate_studio_catalog (512x512): "${a.productTitle}".`
         );
         const dna = a.visualDna;
         if (dna) {
@@ -250,7 +252,7 @@ export function sanitizeReasoningToTelemetry(
       }
       case 'recalculate_margins_vm':
         lines.push(
-          `[SEMANTIC_BINDING] Batch repricing -> recalculate_margins_vm: margin ${a.targetMarginPercent}% + tax ${a.taxRatePercent}%.`
+          `[SEMANTIC_BINDING] Stage-2 batch repricing -> recalculate_margins_vm: margin ${a.targetMarginPercent}% + tax ${a.taxRatePercent}%.`
         );
         break;
     }

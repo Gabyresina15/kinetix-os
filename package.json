@@ -1,15 +1,22 @@
 {
   "name": "kinetix-os",
   "version": "1.0.0",
-  "description": "Kinetix OS - Closed-Loop Spatial ERP & Multimodal DAG Orchestrator (Meta Global AI Developer Hackathon)",
+  "description": "Kinetix OS — Autonomous Spatial ERP & Warehouse Ledger Orchestrator powered by Meta AI (Muse Spark Open, SAM 3.1, Muse Code, Muse Image, Muse Voice)",
   "main": "dist/server.js",
+  "workspaces": [
+    "client"
+  ],
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "replay": "tsx src/scripts/startReplay.ts",
-    "seed": "tsx src/scripts/seedDb.ts",
-    "build": "tsc",
+    "dev": "tsx src/scripts/devRunner.ts",
+    "replay": "tsx src/scripts/devRunner.ts --replay",
+    "build": "tsc && npm --prefix client run build",
+    "reset": "tsx src/scripts/resetLedger.ts",
     "test": "tsx --test src/__tests__/kinetix.test.ts",
+    "server:dev": "tsx watch src/server.ts",
+    "server:replay": "tsx src/scripts/startReplay.ts",
+    "client:dev": "npm --prefix client run dev",
+    "start": "tsx src/server.ts",
+    "seed": "tsx src/scripts/seedDb.ts",
     "test:stream": "curl -N -X POST http://localhost:4000/api/orchestrate-stream"
   },
   "keywords": [
@@ -18,7 +25,8 @@
     "muse-spark-open",
     "sam-3.1",
     "muse-image",
-    "muse-wonder",
+    "muse-code",
+    "muse-voice",
     "quickjs-wasm",
     "meta-hackathon"
   ],

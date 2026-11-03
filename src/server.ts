@@ -12,6 +12,7 @@ import {
   OrchestrationPlan,
   compileMuseImagePromptFromDna,
   planFromLiveObjects,
+  computeEvidenceBasedClaimUsd,
 } from './contracts/orchestratorCore';
 import {
   callBasetenMuseSparkOpen,
@@ -43,6 +44,7 @@ import {
   findAuditBlock,
   getAuditBlocksNewestFirst,
   resetAuditLedger,
+  syncAuditLedgerToDisk,
   verifyAuditChainIntegrity,
 } from './services/auditLedger';
 
@@ -114,6 +116,7 @@ async function syncStoreStateFromMongo(): Promise<void> {
       if (LIVE_STORE_STATE.inventory.length === 0) {
         LIVE_STORE_STATE.inventory = cloneInitialCatalog();
       }
+      await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
       return;
     }
 
@@ -143,6 +146,9 @@ async function syncStoreStateFromMongo(): Promise<void> {
         objectLabel: c.label,
         reason: c.reason,
         amountUsd: c.amountUsd,
+        baseCostUsd: c.baseCostUsd,
+        damageFactor: c.damageFactor,
+        defectSeverity: c.defectSeverity,
         thresholdUsd: c.thresholdUsd,
         dispatchChannel: c.dispatchChannel,
         externalReceiptId: c.externalReceiptId,
@@ -152,6 +158,7 @@ async function syncStoreStateFromMongo(): Promise<void> {
       }));
     }
 
+    await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
     console.log(`[Kinetix] Memory state synced (${LIVE_STORE_STATE.inventory.length} SKUs).`);
   } catch (error) {
     console.error('[Kinetix] Failed to sync with MongoDB at startup, using in-memory catalog:', error);
@@ -163,7 +170,7 @@ async function syncStoreStateFromMongo(): Promise<void> {
 
 void syncStoreStateFromMongo();
 
-const ZERO_TRUST_LIMIT_USD = 50;
+const FINANCIAL_GUARDRAIL_LIMIT_USD = 50;
 
 const FALLBACK_SAM_MASKS: RawSamMask[] = [
   { bbox: [0.08, 0.25, 0.26, 0.5] },
@@ -241,6 +248,15 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   generate_studio_catalog: 30_000,
 };
 
+// Stage 1 runs independent spatial & inventory mutations in parallel;
+// Stage 2 runs commercial policy synthesis & repricing after Stage 1 stock mutations settle.
+const ACTION_DEPENDENCY_STAGE: Record<string, number> = {
+  quarantine_and_claim: 1,
+  mutate_inventory: 1,
+  generate_studio_catalog: 1,
+  recalculate_margins_vm: 2,
+};
+
 app.post('/api/orchestrate-stream', async (request, reply) => {
   if (!isAuthorizedRequest(request.headers as Record<string, unknown>)) {
     return reply.status(401).send({ ok: false, error: 'UNAUTHORIZED_KINETIX_LIVE_TOKEN' });
@@ -269,8 +285,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     'X-Accel-Buffering': 'no',
   });
 
-  // IMPORTANT (Node 18-23+): Do NOT listen to request.raw ('close'), because IncomingMessage emits 'close'
-  // immediately after Fastify finishes reading the 80KB POST body. Listen to reply.raw ('close') while !writableEnded.
+  // IMPORTANT (Node 18-23+): Listen to reply.raw ('close') while !writableEnded instead of request.raw ('close').
   let streamClosed = false;
   reply.raw.on('close', () => {
     if (!reply.raw.writableEnded) {
@@ -298,6 +313,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     let activePlan: OrchestrationPlan = GOLDEN_FALLBACK_PLAN;
     let rawReasoning = '';
     let sparkLatencyMs = 0;
+    let sparkFirstTokenMs = 0;
     let sparkModelLabel = 'meta-models/muse-spark-open-1026 (Baseten)';
     let spatialLocked = false;
     let lockedRawMasks: RawSamMask[] = FALLBACK_SAM_MASKS;
@@ -308,13 +324,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       spatialLocked = true;
       lockedRawMasks = draftsToRawMasks(objects);
       const earlyNormalized = normalizeSpatialScene(lockedRawMasks);
+      const earlyElapsed = Date.now() - startedAt;
       sendEvent('SPATIAL_LOCK', {
         model: 'Muse Spark Open (early stream)',
-        latencyMs: Date.now() - startedAt,
-        sparkLatencyMs: Date.now() - startedAt,
+        latencyMs: earlyElapsed,
+        sparkLatencyMs: earlyElapsed,
         samUsed: false,
         samLatencyMs: 0,
         samRefined: 0,
+        piiRedacted: earlyNormalized.filter((o) => o.isSensitivePII).length,
         preliminary: true,
         objects: earlyNormalized,
       });
@@ -343,7 +361,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           activePlan = rawFixture.liveSpark.plan;
           rawReasoning = rawFixture.liveSpark.reasoningTrace || 'Loaded from recorded golden-path fixture.';
           sparkLatencyMs = Number(rawFixture.liveSpark.latencyMs) || 0;
-          sparkModelLabel = `${rawFixture.liveSpark.modelUsed || 'muse-spark-open-1026'} [REPLAY]`;
+          sparkFirstTokenMs = Number(rawFixture.liveSpark.firstTokenLatencyMs) || sparkLatencyMs;
+          sparkModelLabel = `${rawFixture.liveSpark.modelUsed || 'meta-models/muse-spark-open-1026'} [REPLAY]`;
         }
       } catch (replayErr) {
         usedFallbackPlan = true;
@@ -383,6 +402,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         activePlan = liveSpark.plan;
         rawReasoning = liveSpark.reasoningTrace;
         sparkLatencyMs = liveSpark.latencyMs;
+        sparkFirstTokenMs = liveSpark.firstTokenLatencyMs ?? liveSpark.latencyMs;
         sparkModelLabel = liveSpark.modelUsed;
 
         await fs.mkdir(path.dirname(liveFixturePath), { recursive: true });
@@ -395,10 +415,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         console.error('[BASETEN FAIL]', message);
         app.log.warn(`Live Baseten fallback triggered: ${message}`);
         sparkLatencyMs = Date.now() - startedAt;
+        sparkFirstTokenMs = sparkLatencyMs;
         if (spatialLocked && lockedRawMasks.length) {
           activePlan = planFromLiveObjects(lockedRawMasks, voiceTranscript);
           rawReasoning = `Live plan could not be validated (${message}). Tools were rebound to the objects already detected.`;
-          sparkModelLabel = 'muse-spark-open-1026 (partial, tools rebound)';
+          sparkModelLabel = 'meta-models/muse-spark-open-1026 (partial, tools rebound)';
         } else {
           usedFallbackPlan = true;
           sparkModelLabel = 'fallback-plan (Baseten unavailable)';
@@ -466,23 +487,20 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const normalizedObjects = normalizeSpatialScene(masksWithRealCrops);
     const piiMasks = normalizedObjects.filter((o) => o.isSensitivePII);
 
-    sendEvent('EDGE_PII_SHIELD', {
-      model: 'crop-gate (post-detection)',
-      latencyMs: cropLatencyMs,
-      redactedMasks: piiMasks.map((o) => ({ id: o.id, bbox: o.bbox })),
-    });
     sendEvent('SPATIAL_LOCK', {
-      model: sam.used ? 'SAM 3.1' : 'Muse Spark Open Vision + Sharp Cropper',
+      model: sam.used ? 'SAM 3.1 (IoU Box Refinement)' : 'Muse Spark Open Vision + Sharp Cropper',
       latencyMs: sam.used ? sam.latencyMs : cropLatencyMs,
       sparkLatencyMs,
+      sparkFirstTokenMs,
       samUsed: sam.used,
       samLatencyMs: sam.latencyMs,
       samRefined: sam.refined,
+      piiRedacted: piiMasks.length,
       usedFallbackPlan,
       objects: normalizedObjects,
     });
 
-    // Pre-resolve claim amounts onto activePlan so GUARDRAIL_AUDIT telemetry and supplier_claims match 1:1.
+    // Dynamically compute evidence-based claim amounts from catalog baseCostUsd and visual damageFactor
     activePlan = {
       ...activePlan,
       actions: activePlan.actions.map((act) => {
@@ -492,12 +510,19 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           label: targetObj?.label,
           itemName: act.defectReason,
         });
-        const plannedClaim = Number(act.claimAmountUsd);
-        const resolvedClaim =
-          Number.isFinite(plannedClaim) && plannedClaim > 0
-            ? plannedClaim
-            : matchedLedgerItem?.baseCostUsd ?? 65;
-        return { ...act, claimAmountUsd: resolvedClaim };
+        const valuation = computeEvidenceBasedClaimUsd({
+          baseCostUsd: matchedLedgerItem?.baseCostUsd ?? 78.0,
+          defectReason: act.defectReason,
+          defectSeverity: act.defectSeverity,
+          damageFactor: act.damageFactor,
+          explicitClaimAmountUsd: act.claimAmountUsd,
+        });
+        return {
+          ...act,
+          defectSeverity: valuation.defectSeverity,
+          damageFactor: valuation.damageFactor,
+          claimAmountUsd: valuation.claimAmountUsd,
+        };
       }),
     };
 
@@ -516,11 +541,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     sendEvent('SPARK_PLAN_LOCKED', {
       model: sparkModelLabel,
       latencyMs: sparkLatencyMs,
+      firstTokenLatencyMs: sparkFirstTokenMs,
       usedFallbackPlan,
       plan: activePlan,
     });
 
-    // Resolve inventory mutations BEFORE pricing so repricing targets all mutated SKUs deterministically (no race).
     const mutatedSkusInRun: string[] = [];
     for (const act of activePlan.actions) {
       if (act.tool === 'mutate_inventory') {
@@ -528,20 +553,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    const ACTION_PRIORITY: Record<string, number> = {
-      quarantine_and_claim: 1,
-      mutate_inventory: 2,
-      recalculate_margins_vm: 3,
-      generate_studio_catalog: 4,
-    };
-    const orderedActions = [...activePlan.actions].sort(
-      (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
-    );
-
     async function runIsolatedToolNode<T>(
       toolName: string,
       targetMaskId: string | undefined,
       timeoutMs: number,
+      dagStage: number,
       task: (signal: AbortSignal) => Promise<T>
     ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
       const nodeStarted = Date.now();
@@ -563,10 +579,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         return { ok: true, value };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown tool execution error';
-        app.log.error({ toolName, error: message }, 'Tool node failed');
+        app.log.error({ toolName, dagStage, error: message }, 'Tool node failed');
         sendEvent('TOOL_FAILED', {
           tool: toolName,
           targetMaskId,
+          dagStage,
           error: message,
           latencyMs: Date.now() - nodeStarted,
         });
@@ -576,11 +593,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    const toolPromises = orderedActions.map((action) => {
+    const executeActionNode = (action: OrchestrationPlan['actions'][number], dagStage: number) => {
       const targetMaskId = 'targetMaskId' in action ? action.targetMaskId : undefined;
       const timeoutMs = TOOL_TIMEOUT_MS[action.tool] ?? 15_000;
 
-      return runIsolatedToolNode(action.tool, targetMaskId, timeoutMs, async (signal) => {
+      return runIsolatedToolNode(action.tool, targetMaskId, timeoutMs, dagStage, async (signal) => {
         const toolStartedAt = Date.now();
 
         if (action.tool === 'quarantine_and_claim') {
@@ -589,14 +606,24 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             label: targetObj?.label,
             itemName: action.defectReason,
           });
-          const resolvedAmount = Number.isFinite(Number(action.claimAmountUsd)) && Number(action.claimAmountUsd) > 0
-            ? Number(action.claimAmountUsd)
-            : matchedLedgerItem?.baseCostUsd ?? 65;
+          const baseCostUsd = matchedLedgerItem?.baseCostUsd ?? 78.0;
+          const valuation = computeEvidenceBasedClaimUsd({
+            baseCostUsd,
+            defectReason: action.defectReason,
+            defectSeverity: action.defectSeverity,
+            damageFactor: action.damageFactor,
+            explicitClaimAmountUsd: action.claimAmountUsd,
+          });
+
+          const resolvedAmount = valuation.claimAmountUsd;
           const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
-          const exceedsLimit = resolvedAmount >= ZERO_TRUST_LIMIT_USD;
-          const guardrailStatus = exceedsLimit
-            ? ('HELD_WAITING_VOICE_AUTH' as const)
-            : ('AUTHORIZED_AND_DISPATCHED' as const);
+          const exceedsLimit = resolvedAmount >= FINANCIAL_GUARDRAIL_LIMIT_USD;
+          const guardrailStatus =
+            resolvedAmount === 0
+              ? ('AUTO_APPROVED' as const)
+              : exceedsLimit
+              ? ('HELD_WAITING_VOICE_AUTH' as const)
+              : ('AUTHORIZED_AND_DISPATCHED' as const);
 
           if (signal.aborted) return;
           const dbCommit = await persistErpMutation('supplier_claims', {
@@ -605,8 +632,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             matchedSku: matchedLedgerItem?.sku,
             label: targetObj?.label || 'Detected Item',
             reason: action.defectReason,
+            baseCostUsd,
+            damageFactor: valuation.damageFactor,
+            defectSeverity: valuation.defectSeverity,
             amountUsd: resolvedAmount,
-            thresholdUsd: ZERO_TRUST_LIMIT_USD,
+            thresholdUsd: FINANCIAL_GUARDRAIL_LIMIT_USD,
             guardrailStatus,
             bbox: targetObj?.bbox,
             cropBase64: targetObj?.cropBase64,
@@ -619,8 +649,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             matchedSku: matchedLedgerItem?.sku,
             objectLabel: targetObj?.label || 'Detected Item',
             reason: action.defectReason,
+            baseCostUsd,
+            damageFactor: valuation.damageFactor,
+            defectSeverity: valuation.defectSeverity,
             amountUsd: resolvedAmount,
-            thresholdUsd: ZERO_TRUST_LIMIT_USD,
+            thresholdUsd: FINANCIAL_GUARDRAIL_LIMIT_USD,
             cropBase64: targetObj?.cropBase64,
             guardrailStatus,
             dispatchChannel: exceedsLimit ? undefined : 'AUTO_BELOW_THRESHOLD',
@@ -630,13 +663,20 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           appendAuditBlock({
             type: 'SUPPLIER_CLAIM',
             skuOrRef: ticketId,
-            summary: `Defect claim -$${resolvedAmount.toFixed(2)} USD (${guardrailStatus}): ${action.defectReason}`,
+            summary: `Defect claim -$${resolvedAmount.toFixed(2)} USD (${valuation.defectSeverity}, factor=${valuation.damageFactor}, ${guardrailStatus}): ${action.defectReason}`,
             undo: { kind: 'REVOKE_CLAIM', ticketId },
-            metadata: { amountUsd: resolvedAmount, guardrailStatus },
+            metadata: {
+              amountUsd: resolvedAmount,
+              baseCostUsd,
+              damageFactor: valuation.damageFactor,
+              defectSeverity: valuation.defectSeverity,
+              guardrailStatus,
+            },
           });
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             targetMaskId: targetObj?.id || action.targetMaskId,
+            dagStage,
             status: exceedsLimit ? 'HELD_GUARDRAIL' : 'MUTATED',
             latencyMs: Date.now() - toolStartedAt,
             result: claimRecord,
@@ -701,6 +741,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             targetMaskId: action.targetMaskId,
+            dagStage,
             status: 'MUTATED',
             latencyMs: Date.now() - toolStartedAt,
             result: { ...item, previousStock, delta: action.delta, mongoId: dbCommit.mongoId, maskId: action.targetMaskId },
@@ -768,6 +809,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             targetMaskId: targetObj?.id || action.targetMaskId,
+            dagStage,
             status: 'MUTATED',
             latencyMs: synthesisLatencyMs || Date.now() - toolStartedAt,
             result: catalogCard,
@@ -776,23 +818,30 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
         if (action.tool === 'recalculate_margins_vm') {
           let rawCode = buildDeterministicPolicyCode();
-          let policyModelLabel = 'Deterministic WASM Policy';
+          let policyModelLabel = 'Deterministic 50ms Sandbox Policy';
+          const claimAction = activePlan.actions.find((a) => a.tool === 'quarantine_and_claim');
           if (mode === 'LIVE' && (hasMetaKey || hasBasetenKey)) {
             try {
               const synth = await callMuseCodeGenerator(
                 action.targetMarginPercent,
                 action.taxRatePercent,
                 voiceTranscript,
-                signal
+                signal,
+                claimAction && claimAction.tool === 'quarantine_and_claim'
+                  ? {
+                      hasCriticalClaim: (claimAction.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD,
+                      defectSeverity: claimAction.defectSeverity,
+                      damageFactor: claimAction.damageFactor,
+                    }
+                  : undefined
               );
               rawCode = synth.code;
               policyModelLabel = synth.modelUsed;
             } catch (codeErr) {
-              app.log.warn(`Policy synthesis fell back to deterministic WASM formula: ${(codeErr as Error).message}`);
+              app.log.warn(`Policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
             }
           }
 
-          // Reprice every non-triage SKU mutated in this run (using its real ledger baseCostUsd), or explicit match.
           const candidateItems: CatalogSeedItem[] = [];
           const deltaBySku = new Map<string, number>();
           for (const act of activePlan.actions) {
@@ -847,7 +896,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
               appendAuditBlock({
                 type: 'WASM_REPRICE',
                 skuOrRef: item.sku,
-                summary: `QuickJS WASM (${action.targetMarginPercent}% margin): $${previousPriceUsd.toFixed(2)} -> $${vmRes.finalPrice.toFixed(2)}`,
+                summary: `50ms Policy Sandbox (${action.targetMarginPercent}% margin): $${previousPriceUsd.toFixed(2)} -> $${vmRes.finalPrice.toFixed(2)}`,
                 undo: { kind: 'RESTORE_PRICE', sku: item.sku, previousPriceUsd },
                 metadata: {
                   sandboxEngine: vmRes.sandboxEngine,
@@ -865,6 +914,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
+            dagStage,
             status: 'MUTATED',
             latencyMs: Date.now() - toolStartedAt,
             modelUsed: policyModelLabel,
@@ -884,9 +934,24 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           });
         }
       });
-    });
+    };
 
-    await Promise.allSettled(toolPromises);
+    // Group actions by dependency stage and execute independent nodes concurrently via Promise.allSettled
+    const actionsByStage = new Map<number, OrchestrationPlan['actions']>();
+    for (const action of activePlan.actions) {
+      const stage = ACTION_DEPENDENCY_STAGE[action.tool] ?? 2;
+      const list = actionsByStage.get(stage) || [];
+      list.push(action);
+      actionsByStage.set(stage, list);
+    }
+
+    const sortedStages = Array.from(actionsByStage.keys()).sort((a, b) => a - b);
+    for (const stage of sortedStages) {
+      const stageActions = actionsByStage.get(stage) || [];
+      await Promise.allSettled(stageActions.map((action) => executeActionNode(action, stage)));
+    }
+
+    await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
     sendEvent('ORCHESTRATION_COMPLETE', {
       totalElapsedMs: Date.now() - startedAt,
@@ -938,6 +1003,7 @@ app.post('/api/confirm-guardrail', async (request, reply) => {
     summary: `Operator authorized -$${Number(held.amountUsd).toFixed(2)} USD via ${dispatch.dispatchedVia}`,
     metadata: { externalReceiptId: dispatch.externalReceiptId, deliveredExternally: dispatch.deliveredExternally },
   });
+  await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
   return reply.send({ ok: true, claim: held, deliveredExternally: dispatch.deliveredExternally });
 });
@@ -959,11 +1025,17 @@ app.post('/api/triage/resolve', async (request, reply) => {
 
   if (body.action === 'CLAIM') {
     const matched = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
-    const amountUsd = matched?.baseCostUsd ?? 85.0;
-    const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
-    const exceedsLimit = amountUsd >= ZERO_TRUST_LIMIT_USD;
-    const guardrailStatus = exceedsLimit ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED';
+    const baseCostUsd = matched?.baseCostUsd ?? 85.0;
     const reason = body.reason || `Supervisor triage defect on ${body.name || cleanSku}`;
+    const valuation = computeEvidenceBasedClaimUsd({
+      baseCostUsd,
+      defectReason: reason,
+      defectSeverity: 'CRITICAL',
+    });
+    const amountUsd = valuation.claimAmountUsd;
+    const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
+    const exceedsLimit = amountUsd >= FINANCIAL_GUARDRAIL_LIMIT_USD;
+    const guardrailStatus = exceedsLimit ? 'HELD_WAITING_VOICE_AUTH' : 'AUTHORIZED_AND_DISPATCHED';
 
     const dbCommit = await persistErpMutation('supplier_claims', {
       ticketId,
@@ -971,8 +1043,11 @@ app.post('/api/triage/resolve', async (request, reply) => {
       matchedSku: cleanSku,
       label: body.name || cleanSku,
       reason,
+      baseCostUsd,
+      damageFactor: valuation.damageFactor,
+      defectSeverity: valuation.defectSeverity,
       amountUsd,
-      thresholdUsd: ZERO_TRUST_LIMIT_USD,
+      thresholdUsd: FINANCIAL_GUARDRAIL_LIMIT_USD,
       guardrailStatus,
       cropBase64: body.cropBase64,
     });
@@ -984,8 +1059,11 @@ app.post('/api/triage/resolve', async (request, reply) => {
       matchedSku: cleanSku,
       objectLabel: body.name || cleanSku,
       reason,
+      baseCostUsd,
+      damageFactor: valuation.damageFactor,
+      defectSeverity: valuation.defectSeverity,
       amountUsd,
-      thresholdUsd: ZERO_TRUST_LIMIT_USD,
+      thresholdUsd: FINANCIAL_GUARDRAIL_LIMIT_USD,
       cropBase64: body.cropBase64,
       guardrailStatus,
       timestamp: new Date().toISOString(),
@@ -997,6 +1075,7 @@ app.post('/api/triage/resolve', async (request, reply) => {
       summary: `Supervisor triage claim -$${amountUsd.toFixed(2)} USD on ${cleanSku}`,
       undo: { kind: 'REVOKE_CLAIM', ticketId },
     });
+    await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
     return reply.send({ ok: true, claim: claimRecord, inventory: LIVE_STORE_STATE.inventory });
   }
 
@@ -1059,6 +1138,7 @@ app.post('/api/triage/resolve', async (request, reply) => {
     summary: `Supervisor triage verified ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock}`,
     undo: { kind: 'RESTORE_STOCK', sku: targetItem.sku, previousStock },
   });
+  await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
   return reply.send({ ok: true, item: targetItem, inventory: LIVE_STORE_STATE.inventory });
 });
@@ -1185,6 +1265,7 @@ app.post('/api/audit-ledger/undo', async (request, reply) => {
     summary: rollbackSummary || `Rolled back ${targetBlock.txId}`,
     metadata: { targetTxId: targetBlock.txId },
   });
+  await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
   return reply.send({
     ok: true,
@@ -1200,6 +1281,7 @@ app.post('/api/reset-demo', async (_request, reply) => {
   LIVE_STORE_STATE.claims = [];
   LIVE_STORE_STATE.catalogDrafts = [];
   resetAuditLedger();
+  await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, []);
   try {
     const db = await getPersistenceDb();
     if (db) {

@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-11-03T17:08:42.310Z",
+  "liveSpark": {
+    "plan": {
+      "summary": "Retención en cuarentena de componente ambiguo (SKU-TRIAGE-PENDING) para resolución en un clic y síntesis de miniatura de catálogo en 512x512 con Muse Image.",
+      "detectedObjects": [
+        {
+          "id": "mask_ambiguous_pcie",
+          "label": "Unverified PCIe",
+          "bbox": [0.34, 0.782, 0.086, 0.043],
+          "confidence": 0.89,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_psu_modular",
+          "label": "Modular PSU",
+          "bbox": [0.814, 0.628, 0.144, 0.184],
+          "confidence": 0.97,
+          "isSensitivePII": false
+        }
+      ],
+      "requiresHumanConfirmation": true,
+      "actions": [
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_ambiguous_pcie",
+          "sku": "SKU-TRIAGE-PENDING",
+          "itemName": "Unverified M.2 NVMe Storage Module [PENDING OCR TRIAGE]",
+          "delta": 1,
+          "unitCostUsd": 110
+        },
+        {
+          "tool": "generate_studio_catalog",
+          "targetMaskId": "mask_psu_modular",
+          "productTitle": "Corsair RM1000x Shift 80 PLUS Gold ATX 3.0",
+          "visualDna": {
+            "containerGeometry": "rectangular cuboid ATX PSU chassis with top honeycomb fan grille",
+            "exactColorPalette": "matte black enclosure with dark graphite fan grille and subtle white specification typography",
+            "detectedBrandOrText": "RM1000x",
+            "surfaceMaterial": "powder-coated steel housing and molded polymer grille"
+          }
+        }
+      ]
+    },
+    "reasoningTrace": "Detected ambiguous storage module without visible barcode; routed to SKU-TRIAGE-PENDING for one-click supervisor triage resolution and triggered 512x512 Muse Image catalog synthesis on mask_psu_modular.",
+    "modelUsed": "meta-models/muse-spark-open-1026 (Baseten 2M TPM)",
+    "firstTokenLatencyMs": 1390,
+    "latencyMs": 10840
+  }
+}

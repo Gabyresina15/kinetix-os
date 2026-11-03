@@ -24,6 +24,7 @@ export interface SparkInferenceResult {
   reasoningTrace: string;
   modelUsed: string;
   latencyMs: number;
+  firstTokenLatencyMs?: number;
 }
 
 export const STUDIO_RENDER_FALLBACK_URI =
@@ -238,6 +239,11 @@ function isRealKey(raw?: string): boolean {
   return Boolean(t && !t.startsWith('your_') && !t.endsWith('_here'));
 }
 
+function normalizeMetaBaseUrl(raw?: string): string {
+  const candidate = (raw || 'https://api.meta.ai/v1').trim();
+  return candidate.includes('api.llama.com') ? 'https://api.meta.ai/v1' : candidate;
+}
+
 export async function callBasetenMuseSparkOpen(
   systemPrompt: string,
   voiceTranscript: string,
@@ -256,18 +262,19 @@ export async function callBasetenMuseSparkOpen(
   const apiKey = useBaseten ? process.env.BASETEN_API_KEY!.trim() : process.env.META_MODEL_API_KEY!.trim();
   const baseUrl = useBaseten
     ? process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1'
-    : process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
+    : normalizeMetaBaseUrl(process.env.META_API_BASE_URL);
   const model = useBaseten
     ? process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026'
     : process.env.META_SPARK_MODEL || 'muse-spark-1.3';
   const providerTag = useBaseten ? 'Baseten 2M TPM' : 'Meta Model API';
 
   const start = Date.now();
+  let firstChunkAt = 0;
 
   const contentParts: any[] = [
     {
       type: 'text',
-      text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the attached workspace image: detect every visible object with normalized [x, y, w, h] boxes, bind the command to them, and extract exact colors, container geometry, material and label text for any studio catalog item. Return ONLY the raw JSON object. Put detectedObjects first.`,
+      text: `OPERATOR VOICE COMMAND: "${voiceTranscript}"\nInspect the attached workspace image: detect every visible object with normalized [x, y, w, h] boxes, bind the command to them, assess defectSeverity and damageFactor for any damaged item, and extract exact colors, container geometry, material and label text for any studio catalog item. Return ONLY the raw JSON object. Put detectedObjects first.`,
     },
   ];
 
@@ -311,6 +318,9 @@ export async function callBasetenMuseSparkOpen(
   let lastSentLen = 0;
   const notify = (content: string, reasoning: string) => {
     const now = Date.now();
+    if (!firstChunkAt && (content.length > 0 || reasoning.length > 0)) {
+      firstChunkAt = now;
+    }
     if (onReasoningProgress && reasoning.length > lastSentLen && now - lastProgressAt >= 180) {
       lastProgressAt = now;
       lastSentLen = reasoning.length;
@@ -364,11 +374,13 @@ export async function callBasetenMuseSparkOpen(
     console.warn('[SPARK SALVAGED]', strict.error.issues.slice(0, 3));
   }
 
+  const totalLatencyMs = Date.now() - start;
   return {
     plan: validatedPlan,
     reasoningTrace: parsedReasoning,
     modelUsed: `${model} (${providerTag})`,
-    latencyMs: Date.now() - start,
+    latencyMs: totalLatencyMs,
+    firstTokenLatencyMs: firstChunkAt ? firstChunkAt - start : totalLatencyMs,
   };
 }
 
@@ -381,11 +393,11 @@ export async function callMuseImageStudioSynthesis(
   resolution: string;
 }> {
   const apiKey = process.env.META_MODEL_API_KEY;
-  const baseUrl = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
+  const baseUrl = normalizeMetaBaseUrl(process.env.META_API_BASE_URL);
   const model = process.env.META_IMAGE_MODEL || 'muse-image-1.0';
-  const requestedSize = process.env.META_IMAGE_SIZE || '1024x1024';
+  const requestedSize = process.env.META_IMAGE_SIZE || '512x512';
 
-  if (!apiKey) {
+  if (!isRealKey(apiKey)) {
     return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false, resolution: 'SVG_FALLBACK' };
   }
 
@@ -394,7 +406,7 @@ export async function callMuseImageStudioSynthesis(
       method: 'POST',
       signal,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey!.trim()}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -441,30 +453,6 @@ type SamMask = {
   isSensitivePII?: boolean;
 };
 
-function extractOutputText(data: unknown): string {
-  const chunks: string[] = [];
-  const walk = (node: unknown) => {
-    if (!node) return;
-    if (typeof node === 'string') {
-      chunks.push(node);
-      return;
-    }
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-      return;
-    }
-    if (typeof node === 'object') {
-      const record = node as Record<string, unknown>;
-      if (typeof record.text === 'string') chunks.push(record.text);
-      if (typeof record.output_text === 'string') chunks.push(record.output_text);
-      if (record.content) walk(record.content);
-      if (record.output) walk(record.output);
-    }
-  };
-  walk(data);
-  return chunks.join('\n');
-}
-
 function readImageSize(dataUrl: string): { w: number; h: number } | null {
   const encoded = dataUrl.split(',')[1];
   if (!encoded) return null;
@@ -498,7 +486,7 @@ function inflateBox(
   return [x, y, Math.max(0.02, right - x), Math.max(0.02, bottom - y)];
 }
 
-function computeIoU(
+export function computeIoU(
   a: [number, number, number, number],
   b: [number, number, number, number]
 ): number {
@@ -538,7 +526,6 @@ function boxesAreSameObject(
   const iou = computeIoU(original, refined);
   const areaRatio = refinedArea / originalArea;
 
-  // Evita sub-part segmentation, bajamos la exigencia de IoU a 0.05 y Area a 0.1 para que deje pasar TODO
   return centerInside && iou >= 0.05 && areaRatio >= 0.1 && areaRatio <= 3.0;
 }
 
@@ -547,7 +534,6 @@ function parseSamBoxes(
   fallbackSize: { w: number; h: number }
 ): Array<[number, number, number, number]> {
   const found: Array<[number, number, number, number]> = [];
-  // Regex flexible: soporta espacios, ausencia de ID inicial y w/h opcionales
   const re = /(?:(\d+)\s*)?<\|box;x1=([\d.]+);y1=([\d.]+);x2=([\d.]+);y2=([\d.]+)(?:;w=([\d.]+);h=([\d.]+))?\|?>/g;
 
   for (const match of text.matchAll(re)) {
@@ -600,15 +586,14 @@ export async function refineMasksWithSam31<T extends SamMask>(
   const apiKey = process.env.META_MODEL_API_KEY;
   const actionable = masks.filter((mask) => !mask.isSensitivePII);
   const size = frameBase64 ? readImageSize(frameBase64) : null;
-  if (!apiKey || !frameBase64?.startsWith('data:image') || actionable.length === 0 || !size) {
+  if (!isRealKey(apiKey) || !frameBase64?.startsWith('data:image') || actionable.length === 0 || !size) {
     return { masks, used: false, latencyMs: 0, refined: 0 };
   }
 
-  const endpoint = process.env.META_SAM_URL || 'https://api.meta.ai/v1/responses';
+  const endpoint = process.env.META_SAM_URL || `${normalizeMetaBaseUrl(process.env.META_API_BASE_URL)}/responses`;
   const model = process.env.META_SAM_MODEL || 'sam-3.1';
   const prompt = `<0f>${actionable
     .map((mask, index) => {
-      // Padding adaptativo: 16% para objetos finos (SSD M.2), 8% para objetos medianos/grandes
       const boxArea = mask.bbox[2] * mask.bbox[3];
       const adaptivePad = boxArea < 0.012 ? 0.16 : 0.08;
       const search = inflateBox(mask.bbox, adaptivePad);
@@ -628,7 +613,7 @@ export async function refineMasksWithSam31<T extends SamMask>(
       method: 'POST',
       signal: AbortSignal.timeout(8000),
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey!.trim()}`,
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
@@ -667,7 +652,6 @@ export async function refineMasksWithSam31<T extends SamMask>(
     const refinedMasks = masks.map((mask) => {
       if (mask.isSensitivePII) return mask;
 
-      // Buscar la caja devuelta por SAM que tenga mayor superposición (IoU) con esta máscara de Spark
       let bestIdx = -1;
       let bestIoU = -1;
 
@@ -692,7 +676,7 @@ export async function refineMasksWithSam31<T extends SamMask>(
     });
 
     console.log(
-      `[SAM 3.1] parsed=${candidateBoxes.length}, kept=${refined}/${actionable.length}, rejected=${rejected}`
+      `[SAM 3.1 IoU] parsed=${candidateBoxes.length}, kept=${refined}/${actionable.length}, rejected=${rejected}`
     );
     return { masks: refinedMasks, used: refined > 0, latencyMs: Date.now() - started, refined };
   } catch (err) {
@@ -705,18 +689,19 @@ export async function callMuseCodeGenerator(
   targetMarginPercent: number,
   taxRatePercent: number,
   operatorDirective?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  warehouseAnomalyContext?: {
+    hasCriticalClaim?: boolean;
+    defectSeverity?: string;
+    damageFactor?: number;
+  }
 ): Promise<{ code: string; modelUsed: string }> {
-  const useMeta = Boolean(process.env.META_MODEL_API_KEY);
-  const apiKey = process.env.META_MODEL_API_KEY || process.env.BASETEN_API_KEY;
-  const rawMetaBase = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
+  const useMeta = isRealKey(process.env.META_MODEL_API_KEY);
+  const apiKey = useMeta ? process.env.META_MODEL_API_KEY!.trim() : process.env.BASETEN_API_KEY?.trim();
   const baseUrl = useMeta
-    ? rawMetaBase.includes('api.llama.com')
-      ? 'https://api.meta.ai/v1'
-      : rawMetaBase
+    ? normalizeMetaBaseUrl(process.env.META_API_BASE_URL)
     : process.env.BASETEN_BASE_URL || 'https://inference.baseten.co/v1';
 
-  // Normalize legacy 'muse-code' CLI alias to live Meta Model API 'muse-wonder-1.0'
   const rawConfiguredModel = process.env.META_CODE_MODEL;
   const metaCodeModel =
     !rawConfiguredModel || rawConfiguredModel === 'muse-code' ? 'muse-wonder-1.0' : rawConfiguredModel;
@@ -724,7 +709,11 @@ export async function callMuseCodeGenerator(
     ? metaCodeModel
     : process.env.BASETEN_MODEL || 'meta-models/muse-spark-open-1026';
 
-  if (!apiKey) throw new Error('NO_API_KEY_FOR_CODE_GEN');
+  if (!apiKey || !isRealKey(apiKey)) throw new Error('NO_API_KEY_FOR_CODE_GEN');
+
+  const anomalyRuleLine = warehouseAnomalyContext?.hasCriticalClaim
+    ? `Active warehouse inspection detected a ${warehouseAnomalyContext.defectSeverity || 'CRITICAL'} batch anomaly (damageFactor=${warehouseAnomalyContext.damageFactor ?? 0.85}); include a quality-assurance handling adjustment (1% to 2%) if inboundDelta > 0.`
+    : 'Standard inbound batch with no lot-wide revocation penalty.';
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -739,13 +728,21 @@ export async function callMuseCodeGenerator(
       max_tokens: 4096,
       messages: [
         {
-          role: 'user',
+          role: 'system',
           content: [
-            'Keep internal reasoning under 35 words. Return ONLY pure JavaScript formatted across 6-9 indented lines (no markdown fences, no comments):',
-            'Define function calculatePrice(ctx) where ctx = { cost, marginPct, taxPct, stock, inboundDelta }.',
-            'Compute gross = ctx.cost / (1 - ctx.marginPct / 100), apply stock tiering (0.97 if ctx.stock > 120, 1.04 if ctx.stock < 15, plus any explicit discount/surcharge mentioned in the directive below), multiply by (1 + ctx.taxPct / 100), and return Number(result.toFixed(2)).',
-            `Parameters: marginPct=${targetMarginPercent}, taxPct=${taxRatePercent}. Directive: "${(operatorDirective || '').slice(0, 220)}"`,
+            'You are the Kinetix OS Warehouse Commercial Policy Synthesizer (Muse Code).',
+            'Keep internal reasoning under 35 words. Output ONLY executable JavaScript (6-10 lines, no markdown fences, no prose).',
+            'Synthesize function calculatePrice(ctx) where ctx = { cost, marginPct, taxPct, stock, inboundDelta }.',
+            'Business rules to synthesize dynamically into code:',
+            '1. Derive gross selling price from unit acquisition cost (ctx.cost) and target operating margin percentage (ctx.marginPct).',
+            '2. Apply warehouse inventory tiering: an overstock clearance discount (3% off) when ctx.stock > 120, or a low-stock scarcity buffer (+4%) when ctx.stock < 15.',
+            `3. ${anomalyRuleLine}`,
+            '4. Apply VAT/tax rate percentage (ctx.taxPct) and return a finite number rounded to 2 decimals that strictly increases with ctx.cost.',
           ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: `Target Margin: ${targetMarginPercent}%, Tax Rate: ${taxRatePercent}%. Operator Directive: "${(operatorDirective || '').slice(0, 220)}"`,
         },
       ],
     }),
@@ -860,10 +857,9 @@ export async function callMuseVoiceTranscribe(
 }> {
   const started = Date.now();
   const apiKey = process.env.META_MODEL_API_KEY;
-  if (!apiKey) throw new Error('META_MODEL_API_KEY_NOT_SET');
+  if (!isRealKey(apiKey)) throw new Error('META_MODEL_API_KEY_NOT_SET');
 
-  const rawBase = process.env.META_API_BASE_URL || 'https://api.meta.ai/v1';
-  const baseUrl = rawBase.includes('api.llama.com') ? 'https://api.meta.ai/v1' : rawBase;
+  const baseUrl = normalizeMetaBaseUrl(process.env.META_API_BASE_URL);
   const rawModel = process.env.META_VOICE_MODEL;
   const model =
     !rawModel || rawModel === 'voice-transcribe' ? 'muse-voice-transcribe-1.0' : rawModel;
@@ -905,7 +901,7 @@ export async function callMuseVoiceTranscribe(
     method: 'POST',
     signal: signal ?? AbortSignal.timeout(15_000),
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey!.trim()}`,
     },
     body: form,
   });

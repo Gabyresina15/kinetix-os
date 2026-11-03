@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { CatalogSeedItem, INITIAL_CATALOG } from '../data/catalogSeed';
 
 export type AuditTxType =
   | 'STOCK_DELTA'
@@ -33,6 +36,8 @@ export interface AuditLedgerBlock {
 const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 const chain: AuditLedgerBlock[] = [];
 
+export const AUDIT_LEDGER_FILE_PATH = path.join(process.cwd(), 'data', 'erp-audit-ledger.json');
+
 function computeBlockHash(payload: {
   index: number;
   txId: string;
@@ -44,6 +49,26 @@ function computeBlockHash(payload: {
 }): string {
   const canonical = `${payload.index}|${payload.txId}|${payload.timestamp}|${payload.type}|${payload.skuOrRef}|${payload.summary}|${payload.prevHash}`;
   return createHash('sha256').update(canonical).digest('hex');
+}
+
+export async function syncAuditLedgerToDisk(
+  inventory: readonly CatalogSeedItem[] = INITIAL_CATALOG,
+  claims: Record<string, unknown>[] = []
+): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(AUDIT_LEDGER_FILE_PATH), { recursive: true });
+    const snapshot = {
+      updatedAt: new Date().toISOString(),
+      integrity: verifyAuditChainIntegrity(),
+      skuCount: inventory.length,
+      inventory,
+      claims,
+      blocks: getAuditBlocksNewestFirst(),
+    };
+    await fs.writeFile(AUDIT_LEDGER_FILE_PATH, JSON.stringify(snapshot, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[AuditLedger] Disk snapshot skipped:', (err as Error).message);
+  }
 }
 
 export function appendAuditBlock(input: {
@@ -85,6 +110,7 @@ export function appendAuditBlock(input: {
     metadata: input.metadata,
   };
   chain.push(block);
+  void syncAuditLedgerToDisk();
   return block;
 }
 
@@ -126,4 +152,5 @@ export function findAuditBlock(txId: string): AuditLedgerBlock | undefined {
 
 export function resetAuditLedger(): void {
   chain.length = 0;
+  void syncAuditLedgerToDisk(INITIAL_CATALOG, []);
 }

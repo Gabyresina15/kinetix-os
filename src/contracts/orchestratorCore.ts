@@ -40,7 +40,7 @@ export function compileMuseImagePromptFromDna(dna: VisualDna): string {
     `Exact color palette: ${dna.exactColorPalette}.`,
     `Surface & material: ${dna.surfaceMaterial}.`,
     `Visible markings/details: "${dna.detectedBrandOrText}".`,
-    `Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, crisp studio hardware hero shot.`,
+    `Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, crisp 512x512 studio hardware catalog asset.`,
   ].join(' ');
 }
 
@@ -57,12 +57,17 @@ export const DetectedSceneObjectSchema = z.object({
   isSensitivePII: z.boolean().default(false),
 });
 
+export const DefectSeveritySchema = z.enum(['INTACT', 'MINOR', 'MODERATE', 'CRITICAL']);
+export type DefectSeverity = z.infer<typeof DefectSeveritySchema>;
+
 const ActionSchema = z.discriminatedUnion('tool', [
   z.object({
     tool: z.literal('quarantine_and_claim'),
     targetMaskId: z.string(),
     defectReason: z.string(),
-    claimAmountUsd: z.coerce.number().default(145.0),
+    defectSeverity: DefectSeveritySchema.optional(),
+    damageFactor: z.coerce.number().min(0).max(1).optional(),
+    claimAmountUsd: z.coerce.number().min(0).optional(),
   }),
   z.object({
     tool: z.literal('mutate_inventory'),
@@ -83,7 +88,7 @@ const ActionSchema = z.discriminatedUnion('tool', [
     targetMarginPercent: z.coerce.number().default(32),
     taxRatePercent: z.coerce.number().default(21),
     sku: z.string().optional(),
-    itemName: z.string().optional()
+    itemName: z.string().optional(),
   }),
 ]);
 
@@ -96,6 +101,81 @@ export const OrchestrationPlanSchema = z.object({
 
 export type OrchestrationPlan = z.infer<typeof OrchestrationPlanSchema>;
 
+export function resolveDamageSeverityAndFactor(
+  defectReason: string,
+  defectSeverity?: DefectSeverity,
+  rawDamageFactor?: number
+): { defectSeverity: DefectSeverity; damageFactor: number } {
+  const reasonNorm = (defectReason || '').toLowerCase();
+
+  if (
+    defectSeverity === 'INTACT' ||
+    rawDamageFactor === 0 ||
+    /\b(intact|intacto|sin daño|sin defecto|no defect|undamaged|ok)\b/i.test(reasonNorm)
+  ) {
+    return { defectSeverity: 'INTACT', damageFactor: 0 };
+  }
+
+  let inferredSeverity: DefectSeverity = defectSeverity || 'CRITICAL';
+  if (!defectSeverity) {
+    if (/\b(scratch|raya|cosmetic|est[eé]tic|packaging|empaque|caja|etiqueta)\b/i.test(reasonNorm)) {
+      inferredSeverity = 'MINOR';
+    } else if (/\b(dent|aboll|loose|suelto|fan|ventilador|bracket)\b/i.test(reasonNorm)) {
+      inferredSeverity = 'MODERATE';
+    } else {
+      inferredSeverity = 'CRITICAL';
+    }
+  }
+
+  const defaultFactorBySeverity: Record<DefectSeverity, number> = {
+    INTACT: 0,
+    MINOR: 0.25,
+    MODERATE: 0.65,
+    CRITICAL: 0.85,
+  };
+
+  const factor =
+    typeof rawDamageFactor === 'number' && Number.isFinite(rawDamageFactor) && rawDamageFactor > 0 && rawDamageFactor <= 1
+      ? Number(rawDamageFactor.toFixed(2))
+      : defaultFactorBySeverity[inferredSeverity];
+
+  return { defectSeverity: inferredSeverity, damageFactor: factor };
+}
+
+export function computeEvidenceBasedClaimUsd(params: {
+  baseCostUsd: number;
+  defectReason: string;
+  defectSeverity?: DefectSeverity;
+  damageFactor?: number;
+  explicitClaimAmountUsd?: number;
+}): {
+  claimAmountUsd: number;
+  damageFactor: number;
+  defectSeverity: DefectSeverity;
+} {
+  const safeBaseCost =
+    typeof params.baseCostUsd === 'number' && Number.isFinite(params.baseCostUsd) && params.baseCostUsd > 0
+      ? params.baseCostUsd
+      : 78.0;
+
+  const { defectSeverity, damageFactor } = resolveDamageSeverityAndFactor(
+    params.defectReason,
+    params.defectSeverity,
+    params.damageFactor
+  );
+
+  if (defectSeverity === 'INTACT' || damageFactor === 0) {
+    return { claimAmountUsd: 0, damageFactor: 0, defectSeverity: 'INTACT' };
+  }
+
+  const catalogDerivedUsd = Number((safeBaseCost * damageFactor).toFixed(2));
+  return {
+    claimAmountUsd: catalogDerivedUsd,
+    damageFactor,
+    defectSeverity,
+  };
+}
+
 export const FALLBACK_MASK_IDS = ['mask_fallback_1', 'mask_fallback_2', 'mask_fallback_3'] as const;
 
 export const GOLDEN_FALLBACK_PLAN: OrchestrationPlan = {
@@ -105,8 +185,9 @@ export const GOLDEN_FALLBACK_PLAN: OrchestrationPlan = {
     {
       tool: 'quarantine_and_claim',
       targetMaskId: FALLBACK_MASK_IDS[0],
-      defectReason: 'Damaged item reported by operator',
-      claimAmountUsd: 120.0,
+      defectReason: 'Structural fin defect reported by operator on copper heatpipe tower cooler',
+      defectSeverity: 'CRITICAL',
+      damageFactor: 0.85,
     },
     {
       tool: 'mutate_inventory',
@@ -211,8 +292,9 @@ export function planFromLiveObjects(
     actions.push({
       tool: 'quarantine_and_claim',
       targetMaskId: claimTarget.id,
-      defectReason: `Defecto reportado por el operador sobre ${claimTarget.label}`,
-      claimAmountUsd: 120,
+      defectReason: `Defecto físico reportado por el operador sobre ${claimTarget.label}`,
+      defectSeverity: 'CRITICAL',
+      damageFactor: 0.85,
     });
   }
   const seenStock = new Set<string>();
@@ -305,8 +387,6 @@ export function tightenAndDeoverlapBoxes<
       if (overlapX > 0 && overlapY > 0) {
         const areaA = a[2] * a[3];
         const areaB = b[2] * b[3];
-        // Si la caja A es más grande y empieza a la izquierda de la caja B (ej. RAM pisando SSD),
-        // recortamos el ancho de A para que frene justo antes de B:
         if (areaA > areaB && a[0] < b[0] && b[0] - a[0] >= 0.04) {
           a[2] = Number((b[0] - a[0] - 0.008).toFixed(3));
         }

@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-11-03T01:27:12.107Z",
+  "timestamp": "2026-11-03T17:01:07.145Z",
   "liveSpark": {
     "plan": {
-      "summary": "Reclamo por cooler de torre con aleta golpeada, alta de 2 módulos RAM y 1 SSD M.2, catálogo para fuente modular y recálculo de márgenes al 32%.",
+      "summary": "Reclamo por cooler de torre con aleta golpeada (severidad CRITICAL, factor 0.85), alta de 2 módulos RAM y 1 SSD M.2, catálogo en 512x512 para fuente modular y recálculo de márgenes al 32%.",
       "detectedObjects": [
         {
           "id": "mask_tower_cooler",
@@ -39,7 +39,9 @@
           "tool": "quarantine_and_claim",
           "targetMaskId": "mask_tower_cooler",
           "defectReason": "aleta golpeada en cooler de torre con tubos de cobre",
-          "claimAmountUsd": 65
+          "defectSeverity": "CRITICAL",
+          "damageFactor": 0.85,
+          "claimAmountUsd": 66.3
         },
         {
           "tool": "mutate_inventory",
@@ -75,8 +77,9 @@
         }
       ]
     },
-    "reasoningTrace": "Grounded 4 non-overlapping hardware assets: mask_tower_cooler [0.430, 0.505, 0.140, 0.255], mask_ram_kit [0.178, 0.710, 0.134, 0.155], mask_ssd_m2 [0.342, 0.782, 0.086, 0.043], mask_psu_modular [0.814, 0.628, 0.144, 0.184]. Bound defect claim ($65 >= $50 guardrail), stock deltas (+2 DDR5 kit, +1 NVMe SSD), PSU visual DNA synthesis, and 32% margin + 21% tax WASM policy recalculation.",
+    "reasoningTrace": "Grounded 4 non-overlapping hardware assets: mask_tower_cooler [0.430, 0.505, 0.140, 0.255], mask_ram_kit [0.178, 0.710, 0.134, 0.155], mask_ssd_m2 [0.342, 0.782, 0.086, 0.043], mask_psu_modular [0.814, 0.628, 0.144, 0.184]. Evaluated bent fin on SKU-AIR-SINGLE-TOWER ($78.00 baseCost * 0.85 CRITICAL damageFactor = $66.30 >= $50 guardrail), stock deltas (+2 DDR5 kit, +1 NVMe SSD), PSU visual DNA 512x512 synthesis, and 32% margin + 21% tax policy recalculation.",
     "modelUsed": "meta-models/muse-spark-open-1026 (Baseten 2M TPM)",
-    "latencyMs": 13592
+    "firstTokenLatencyMs": 1480,
+    "latencyMs": 12352
   }
 }
