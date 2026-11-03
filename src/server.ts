@@ -309,11 +309,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
     if (mode === 'REPLAY') {
       try {
+        const preferredPath =
+          process.env.REPLAY_USE_LAST_RUN === '1' ? liveFixturePath : trackedFixturePath;
+        const secondaryPath =
+          process.env.REPLAY_USE_LAST_RUN === '1' ? trackedFixturePath : liveFixturePath;
         let rawText: string;
         try {
-          rawText = await fs.readFile(liveFixturePath, 'utf8');
+          rawText = await fs.readFile(preferredPath, 'utf8');
         } catch {
-          rawText = await fs.readFile(trackedFixturePath, 'utf8');
+          rawText = await fs.readFile(secondaryPath, 'utf8');
         }
         const rawFixture = JSON.parse(rawText);
         if (rawFixture?.liveSpark?.plan) {
@@ -459,6 +463,25 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       objects: normalizedObjects,
     });
 
+    // Pre-resolve claim amounts onto activePlan so GUARDRAIL_AUDIT telemetry and supplier_claims match 1:1.
+    activePlan = {
+      ...activePlan,
+      actions: activePlan.actions.map((act) => {
+        if (act.tool !== 'quarantine_and_claim') return act;
+        const targetObj = normalizedObjects.find((o) => o.id === act.targetMaskId) || normalizedObjects[0];
+        const matchedLedgerItem = findBestInventoryMatch(LIVE_STORE_STATE.inventory, {
+          label: targetObj?.label,
+          itemName: act.defectReason,
+        });
+        const plannedClaim = Number(act.claimAmountUsd);
+        const resolvedClaim =
+          Number.isFinite(plannedClaim) && plannedClaim > 0
+            ? plannedClaim
+            : matchedLedgerItem?.baseCostUsd ?? 65;
+        return { ...act, claimAmountUsd: resolvedClaim };
+      }),
+    };
+
     const cleanTelemetryReasoning = sanitizeReasoningToTelemetry(
       rawReasoning,
       normalizedObjects,
@@ -547,15 +570,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             label: targetObj?.label,
             itemName: action.defectReason,
           });
-          const plannedClaim = Number(action.claimAmountUsd);
-          const resolvedAmount =
-            Number.isFinite(plannedClaim) && plannedClaim > 0 && plannedClaim < ZERO_TRUST_LIMIT_USD
-              ? plannedClaim
-              : matchedLedgerItem && matchedLedgerItem.baseCostUsd >= ZERO_TRUST_LIMIT_USD
-                ? matchedLedgerItem.baseCostUsd
-                : Number.isFinite(plannedClaim) && plannedClaim > 0
-                  ? plannedClaim
-                  : matchedLedgerItem?.baseCostUsd ?? 65;
+          const resolvedAmount = Number.isFinite(Number(action.claimAmountUsd)) && Number(action.claimAmountUsd) > 0
+            ? Number(action.claimAmountUsd)
+            : matchedLedgerItem?.baseCostUsd ?? 65;
           const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
           const exceedsLimit = resolvedAmount >= ZERO_TRUST_LIMIT_USD;
           const guardrailStatus = exceedsLimit
@@ -629,6 +646,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
           const previousStock = item.stock;
           item.stock += action.delta;
+          LIVE_STORE_STATE.inventory = [
+            item,
+            ...LIVE_STORE_STATE.inventory.filter((existing) => existing.sku !== item!.sku),
+          ];
 
           if (signal.aborted) return;
           await upsertInventorySnapshot(item);
