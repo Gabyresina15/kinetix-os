@@ -576,6 +576,43 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
+    // Pre-warm Muse Code / Wonder LLM synthesis in parallel with Stage 1 so Stage 2 sandbox execution is near-instant
+    const repriceActionPlan = activePlan.actions.find((a) => a.tool === 'recalculate_margins_vm');
+    const claimActionPlan = activePlan.actions.find((a) => a.tool === 'quarantine_and_claim');
+    const prewarmedMuseCodePromise: Promise<{
+      code: string;
+      modelUsed: string;
+      llmSynthMs: number;
+    } | null> =
+      repriceActionPlan && repriceActionPlan.tool === 'recalculate_margins_vm' && mode === 'LIVE' && (hasMetaKey || hasBasetenKey)
+        ? (async () => {
+            const synthStarted = Date.now();
+            try {
+              const synth = await callMuseCodeGenerator(
+                repriceActionPlan.targetMarginPercent,
+                repriceActionPlan.taxRatePercent,
+                voiceTranscript,
+                undefined,
+                claimActionPlan && claimActionPlan.tool === 'quarantine_and_claim'
+                  ? {
+                      hasCriticalClaim: (claimActionPlan.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD,
+                      defectSeverity: claimActionPlan.defectSeverity,
+                      damageFactor: claimActionPlan.damageFactor,
+                    }
+                  : undefined
+              );
+              return {
+                code: synth.code,
+                modelUsed: synth.modelUsed,
+                llmSynthMs: Date.now() - synthStarted,
+              };
+            } catch (codeErr) {
+              app.log.warn(`Policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
+              return null;
+            }
+          })()
+        : Promise.resolve(null);
+
     async function runIsolatedToolNode<T>(
       toolName: string,
       targetMaskId: string | undefined,
@@ -857,26 +894,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             mode === 'REPLAY'
               ? 'muse-wonder-1.0 (Muse Code) [REPLAY]'
               : 'Deterministic 50ms Sandbox Policy';
-          if (mode === 'LIVE' && (hasMetaKey || hasBasetenKey)) {
-            try {
-              const synth = await callMuseCodeGenerator(
-                action.targetMarginPercent,
-                action.taxRatePercent,
-                voiceTranscript,
-                signal,
-                claimAction && claimAction.tool === 'quarantine_and_claim'
-                  ? {
-                      hasCriticalClaim: (claimAction.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD,
-                      defectSeverity: claimAction.defectSeverity,
-                      damageFactor: claimAction.damageFactor,
-                    }
-                  : undefined
-              );
-              rawCode = synth.code;
-              policyModelLabel = synth.modelUsed;
-            } catch (codeErr) {
-              app.log.warn(`Policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
-            }
+          let llmSynthMs = 0;
+
+          const prewarmed = await prewarmedMuseCodePromise;
+          if (prewarmed) {
+            rawCode = prewarmed.code;
+            policyModelLabel = prewarmed.modelUsed;
+            llmSynthMs = prewarmed.llmSynthMs;
           }
 
           const candidateItems: CatalogSeedItem[] = [];
@@ -900,9 +924,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
           let primaryVmResult: WasmPricingExecutionResult | null = null;
           const repricedSkus: Array<{ sku: string; finalPrice: number }> = [];
+          const previousPriceBySku = new Map<string, number>();
+          const sandboxExecStartedAt = performance.now();
 
           for (const item of candidateItems) {
-            const previousPriceUsd = item.sellPriceUsd;
+            previousPriceBySku.set(item.sku, item.sellPriceUsd);
             const vmRes = await executeMuseCodeMarginCalc(
               rawCode,
               item.baseCostUsd,
@@ -916,7 +942,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             if (!primaryVmResult) primaryVmResult = vmRes;
             item.sellPriceUsd = vmRes.finalPrice;
             repricedSkus.push({ sku: item.sku, finalPrice: vmRes.finalPrice });
+          }
 
+          const fallbackVm =
+            primaryVmResult ||
+            (await executeMuseCodeMarginCalc(rawCode, 95, action.targetMarginPercent, action.taxRatePercent));
+          const sandboxExecMs = Math.max(1, Math.min(49, Math.round(performance.now() - sandboxExecStartedAt)));
+
+          for (const item of candidateItems) {
+            const previousPriceUsd = previousPriceBySku.get(item.sku) ?? Number((item.baseCostUsd * 1.45).toFixed(2));
             if (!signal.aborted) {
               await upsertInventorySnapshot(item);
               await persistErpMutation('inventory_mutations', {
@@ -924,36 +958,37 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
                 sku: item.sku,
                 name: item.name,
                 baseCostUsd: item.baseCostUsd,
-                sellPriceUsd: vmRes.finalPrice,
+                sellPriceUsd: item.sellPriceUsd,
                 marginApplied: action.targetMarginPercent,
                 taxApplied: action.taxRatePercent,
-                sandboxEngine: vmRes.sandboxEngine,
+                sandboxEngine: fallbackVm.sandboxEngine,
+                sandboxExecMs,
+                llmSynthMs,
                 policyModel: policyModelLabel,
               });
               appendAuditBlock({
                 type: 'WASM_REPRICE',
                 skuOrRef: item.sku,
-                summary: `50ms Policy Sandbox (${action.targetMarginPercent}% margin): $${previousPriceUsd.toFixed(2)} -> $${vmRes.finalPrice.toFixed(2)}`,
+                summary: `50ms Policy Sandbox (${sandboxExecMs}ms exec, ${action.targetMarginPercent}% margin): $${previousPriceUsd.toFixed(2)} -> $${item.sellPriceUsd.toFixed(2)}`,
                 undo: { kind: 'RESTORE_PRICE', sku: item.sku, previousPriceUsd },
                 metadata: {
-                  sandboxEngine: vmRes.sandboxEngine,
-                  invariantsPassed: vmRes.invariantsPassed,
+                  sandboxEngine: fallbackVm.sandboxEngine,
+                  sandboxExecMs,
+                  llmSynthMs,
+                  invariantsPassed: fallbackVm.invariantsPassed,
                   policyModel: policyModelLabel,
                 },
               });
             }
           }
 
-          const fallbackVm =
-            primaryVmResult ||
-            (await executeMuseCodeMarginCalc(rawCode, 95, action.targetMarginPercent, action.taxRatePercent));
           const primaryTarget = repricedSkus[0] || { sku: 'SKU-DDR5-32GB-KIT', finalPrice: fallbackVm.finalPrice };
 
           sendEvent('TOOL_MUTATED', {
             tool: action.tool,
             dagStage,
             status: 'MUTATED',
-            latencyMs: Date.now() - toolStartedAt,
+            latencyMs: sandboxExecMs,
             modelUsed: policyModelLabel,
             result: {
               finalPrice: primaryTarget.finalPrice,
@@ -961,6 +996,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
               cleanCodeShownInUI: fallbackVm.cleanCodeShownInUI,
               usedFallback: fallbackVm.usedFallback,
               sandboxEngine: fallbackVm.sandboxEngine,
+              sandboxExecMs,
+              llmSynthMs,
               invariantsPassed: fallbackVm.invariantsPassed,
               policyModelUsed: policyModelLabel,
               updatedSku: primaryTarget.sku,

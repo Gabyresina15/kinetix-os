@@ -118,6 +118,8 @@ export interface VmExecutionResult {
   executedCode: string;
   usedFallback: boolean;
   sandboxEngine?: string;
+  sandboxExecMs?: number;
+  llmSynthMs?: number;
   invariantsPassed?: boolean;
   policyModelUsed?: string;
   updatedSku: string;

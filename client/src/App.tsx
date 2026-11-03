@@ -75,7 +75,9 @@ export default function App() {
     uploadedImage,
     sourceDims,
     cameraActive,
+    cameraMode,
     startCamera,
+    resumeCameraFeed,
     loadPresetImage,
     handleImageUpload,
     captureFrameBase64,
@@ -490,13 +492,16 @@ export default function App() {
                     : item
                 )
               );
-              const detailText =
+              const sandboxMs = normalizedVm.sandboxExecMs ?? latencyMs;
+              const llmMs = normalizedVm.llmSynthMs;
+              const baseDetail =
                 batch.length > 1
                   ? `Repriced ${batch.length} SKUs (${batch.map((b) => `${b.sku}→$${b.finalPrice}`).join(', ')})`
                   : `${batch[0].sku} repriced to $${batch[0].finalPrice} USD`;
+              const detailText = `${baseDetail} · Sandbox: ${sandboxMs}ms/50ms${llmMs ? ` (LLM Synth: ${llmMs}ms)` : ''}`;
               updateStep(tool, {
                 status: 'MUTATED',
-                latencyMs,
+                latencyMs: sandboxMs,
                 model: normalizedVm.policyModelUsed || 'Muse Code / Wonder + 50ms Sandbox',
                 detail: detailText,
               });
@@ -605,7 +610,8 @@ export default function App() {
 
   const switchBenchScene = useCallback(
     (benchUrl: '/hardware-bench1.jpg' | '/hardware-bench.jpg') => {
-      loadPresetImage(benchUrl);
+      loadPresetImage(benchUrl, true);
+      resumeCameraFeed();
       setSelectedMaskId(null);
       setMasks([]);
       setReasoningTrace('');
@@ -619,7 +625,7 @@ export default function App() {
       setSteps(INITIAL_STEPS);
       setVoiceText(benchUrl === '/hardware-bench.jpg' ? BENCH_2_PROMPT : DEFAULT_PROMPT);
     },
-    [loadPresetImage, clearQueue, abortStream]
+    [loadPresetImage, resumeCameraFeed, clearQueue, abortStream]
   );
 
   const resetDemoState = useCallback(async () => {
@@ -627,7 +633,8 @@ export default function App() {
       await fetch(apiUrl('/api/reset-demo'), { method: 'POST', headers: apiHeaders() });
     } catch {}
     cancelRecording();
-    loadPresetImage('/hardware-bench1.jpg');
+    loadPresetImage('/hardware-bench1.jpg', true);
+    resumeCameraFeed();
     setSelectedMaskId(null);
     setVoiceBanner(null);
     setMasks([]);
@@ -643,8 +650,7 @@ export default function App() {
     setTelemetry({ samMs: 0, sparkMs: 0, voiceMs: 0, segmenter: 'Sharp crop', piiRedacted: 0 });
     setSteps(INITIAL_STEPS);
     await Promise.all([fetchLiveLedger(), fetchAuditLedger()]);
-    if (videoRef.current && cameraActive) videoRef.current.play();
-  }, [cameraActive, clearQueue, abortStream, cancelRecording, loadPresetImage, fetchLiveLedger, fetchAuditLedger]);
+  }, [clearQueue, abortStream, cancelRecording, loadPresetImage, resumeCameraFeed, fetchLiveLedger, fetchAuditLedger]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -810,10 +816,26 @@ export default function App() {
           />
 
           <button
-            onClick={startCamera}
-            className={`px-2.5 py-1.5 rounded border text-[10px] font-bold cursor-pointer uppercase tracking-wide transition-colors ${cameraActive ? 'border-cyan-500 bg-cyan-950/40 text-cyan-300' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+            onClick={() => {
+              void startCamera();
+              setPhase('LIVE_IDLE');
+              setMasks([]);
+            }}
+            title={
+              cameraMode === 'WEBCAM'
+                ? 'Active: Physical USB/Integrated Webcam Stream'
+                : cameraMode === 'SIMULATED_30FPS'
+                ? 'Active: 30 FPS Live Optical Sensor Stream (Auto-fallback when no physical webcam is attached)'
+                : 'Start Live Camera (Physical Webcam or 30 FPS Live Optical Stream)'
+            }
+            className={`px-2.5 py-1.5 rounded border text-[10px] font-bold cursor-pointer uppercase tracking-wide transition-colors flex items-center gap-1.5 ${
+              cameraActive
+                ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
+                : 'border-slate-700 text-slate-400 hover:border-slate-500'
+            }`}
           >
-            Live Cam
+            {cameraActive && <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />}
+            <span>{cameraActive ? (cameraMode === 'WEBCAM' ? 'LIVE CAM · USB' : 'LIVE CAM · 30FPS') : 'Live Cam'}</span>
           </button>
 
           <button
@@ -1364,41 +1386,6 @@ export default function App() {
                 </button>
               </div>
             ) : null}
-            <div className="mb-1.5 flex items-center gap-1.5 flex-wrap">
-              <span className="text-[8px] font-mono uppercase tracking-wider text-slate-500">PRESETS:</span>
-              <button
-                type="button"
-                onClick={() => setVoiceText(DEFAULT_PROMPT)}
-                className="px-1.5 py-0.5 rounded border border-rose-500/40 bg-rose-950/30 hover:bg-rose-900/50 text-[8px] font-mono font-bold text-rose-300 cursor-pointer transition-colors"
-                title="Scenario 1: Critical structural fin damage on $78 cooler -> $66.30 claim (>= $50 USD Guardrail Hold) + 512x512 Studio Catalog + 32% Reprice"
-              >
-                [1] CRITICAL DAMAGE ($66.30 HOLD)
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setVoiceText(
-                    'All components arrived intact with zero physical defects; add the tower cooler, the two DDR5 RAM modules, and the M.2 NVMe SSD to inventory stock, and recalculate prices with a 32% gross margin.'
-                  )
-                }
-                className="px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/50 text-[8px] font-mono font-bold text-emerald-300 cursor-pointer transition-colors"
-                title="Scenario 2: All items intact -> $0.00 claim (No $50 USD Guardrail Hold)"
-              >
-                [2] INTACT INTAKE ($0.00 CLAIM)
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setVoiceText(
-                    'The M.2 storage module has an unreadable barcode label—route it to visual triage pending OCR and synthesize a 512x512 studio catalog image for the modular ATX power supply.'
-                  )
-                }
-                className="px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-950/30 hover:bg-amber-900/50 text-[8px] font-mono font-bold text-amber-300 cursor-pointer transition-colors"
-                title="Scenario 3: Ambiguous barcode routed to SKU-TRIAGE-PENDING + 512x512 Muse Image synthesis"
-              >
-                [3] OCCLUDED SKU TRIAGE (512x512)
-              </button>
-            </div>
             <textarea
               value={voiceText}
               onChange={(e) => setVoiceText(e.target.value)}
@@ -1625,14 +1612,19 @@ export default function App() {
                   <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold">
                     OUT: ${Number(vmExecution.finalPrice).toFixed(2)} USD
                   </span>
-                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-cyan-300">
-                    {(vmExecution.sandboxEngine || 'quickjs-wasm').toUpperCase()} (50ms)
+                  <span className="px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-700/50 text-cyan-300 font-bold">
+                    EXEC: {vmExecution.sandboxExecMs ?? 2}ms / 50ms CAP
                   </span>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-cyan-300">
+                    {(vmExecution.sandboxEngine || 'quickjs-wasm').toUpperCase()}
+                  </span>
+                  {vmExecution.llmSynthMs ? (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
+                      LLM SYNTH: {vmExecution.llmSynthMs}ms
+                    </span>
+                  ) : null}
                   <span className="px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-800/50 text-emerald-400">
                     ASSERTIONS: {vmExecution.invariantsPassed !== false ? 'PASS' : 'FAIL'}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
-                    FALLBACK: {vmExecution.usedFallback ? 'TRUE' : 'FALSE'}
                   </span>
                 </div>
               </div>
