@@ -41,11 +41,12 @@ import { AuditLedgerDrawer } from './components/AuditLedgerDrawer';
 import { apiUrl, apiHeaders } from './core/apiConfig';
 
 const MASK_STYLE_MAP: Record<string, string> = {
-  IDLE_OBSERVED: 'border-slate-500/60 text-slate-300',
-  IDLE: 'border-slate-500/60 text-slate-300',
-  QUARANTINED: 'border-rose-500 text-rose-100 shadow-[0_0_12px_rgba(244,63,94,0.6)]',
-  STOCK_MUTATED: 'border-emerald-400 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.6)]',
-  CATALOG_SYNTH: 'border-cyan-400 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.6)]',
+  IDLE_OBSERVED: 'border-slate-500/60 bg-slate-500/10 text-slate-300',
+  IDLE: 'border-slate-500/60 bg-slate-500/10 text-slate-300',
+  QUARANTINED: 'border-rose-500 bg-rose-500/15 text-rose-100 shadow-[0_0_12px_rgba(244,63,94,0.6)]',
+  STOCK_MUTATED: 'border-emerald-400 bg-emerald-400/12 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.6)]',
+  CATALOG_SYNTH: 'border-cyan-400 bg-cyan-400/14 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.6)]',
+  STUDIO_SYNTHESIZED: 'border-cyan-400 bg-cyan-400/14 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.6)]',
   PII_REDACTED: 'border-amber-400 bg-amber-400/20 text-amber-100',
 };
 
@@ -53,7 +54,10 @@ const resolveMaskStyle = (status: MaskStatus | undefined): string =>
   MASK_STYLE_MAP[status ?? 'IDLE_OBSERVED'] || MASK_STYLE_MAP.IDLE_OBSERVED;
 
 const DEFAULT_PROMPT =
-  'El cooler de torre con tubos de cobre vino con una aleta golpeada, abrí reclamo. Sumá al stock los dos módulos de memoria RAM y el disco SSD M.2. Armame la foto de estudio para la fuente de poder modular y recalculá precios con 32% de margen.';
+  'The copper-heatpipe tower cooler arrived with a crushed heatsink fin, open a supplier claim. Add the two DDR5 RAM modules and the M.2 NVMe SSD to stock, generate a 512x512 studio catalog photo for the modular power supply, and recalculate prices with a 32% margin.';
+
+const BENCH_2_PROMPT =
+  'Add the dual-fan graphics card, the Mini-ITX motherboard, and the AMD processor box to inventory stock, generate a 512x512 studio catalog photo for the graphics card, and recalculate prices with a 30% gross margin.';
 
 const INITIAL_STEPS: ExecutionStep[] = [
   { id: 'sam_lock', title: '2D Spatial Grounding & IoU Box Refinement', model: 'SAM 3.1 IoU + Sharp Cropper', status: 'PENDING' },
@@ -72,6 +76,7 @@ export default function App() {
     sourceDims,
     cameraActive,
     startCamera,
+    loadPresetImage,
     handleImageUpload,
     captureFrameBase64,
   } = useSpatialCamera();
@@ -598,11 +603,32 @@ export default function App() {
     }
   }, [latestClaim?.id, speakTactical, updateStep, fetchAuditLedger]);
 
+  const switchBenchScene = useCallback(
+    (benchUrl: '/hardware-bench1.jpg' | '/hardware-bench.jpg') => {
+      loadPresetImage(benchUrl);
+      setSelectedMaskId(null);
+      setMasks([]);
+      setReasoningTrace('');
+      setLatestClaim(null);
+      setLatestCatalog(null);
+      setVmExecution(null);
+      setPhase('LIVE_IDLE');
+      setActivePulse(null);
+      clearQueue();
+      abortStream();
+      setSteps(INITIAL_STEPS);
+      setVoiceText(benchUrl === '/hardware-bench.jpg' ? BENCH_2_PROMPT : DEFAULT_PROMPT);
+    },
+    [loadPresetImage, clearQueue, abortStream]
+  );
+
   const resetDemoState = useCallback(async () => {
     try {
       await fetch(apiUrl('/api/reset-demo'), { method: 'POST', headers: apiHeaders() });
     } catch {}
     cancelRecording();
+    loadPresetImage('/hardware-bench1.jpg');
+    setSelectedMaskId(null);
     setVoiceBanner(null);
     setMasks([]);
     setReasoningTrace('');
@@ -618,7 +644,7 @@ export default function App() {
     setSteps(INITIAL_STEPS);
     await Promise.all([fetchLiveLedger(), fetchAuditLedger()]);
     if (videoRef.current && cameraActive) videoRef.current.play();
-  }, [cameraActive, clearQueue, abortStream, cancelRecording, fetchLiveLedger, fetchAuditLedger]);
+  }, [cameraActive, clearQueue, abortStream, cancelRecording, loadPresetImage, fetchLiveLedger, fetchAuditLedger]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -660,30 +686,10 @@ export default function App() {
     const isActive = activePulse?.id === m.id;
     const isSelected = m.id === selectedMaskId;
 
-    const statusStyle = isApproximate ? 'border-amber-500/80 text-amber-400' : resolveMaskStyle(m.assignedActionStatus);
+    const statusStyle = isApproximate
+      ? 'border-amber-500/80 bg-amber-500/10 border-dashed text-amber-400'
+      : resolveMaskStyle(m.assignedActionStatus);
     const opacity = isActive ? 1 : isApproximate ? 0.75 : m.confidence ? Math.max(0.55, m.confidence) : 1;
-
-    const tag = `${m.label || ''} ${m.id || ''}`.toLowerCase();
-    const isRamKit = /ram|ddr|memoria|dimm/.test(tag);
-    const isSsd = /ssd|nvme|m\.2/.test(tag);
-    const isCooler = /cooler|torre|heatsink|aleta|fan/.test(tag);
-    const isPsu = /psu|fuente|power|rm1000|atx/.test(tag);
-
-    let strokeColor = '#22d3ee';
-    let fillColor = 'rgba(34, 211, 238, 0.10)';
-    if (isSelected) {
-      strokeColor = '#fbbf24';
-      fillColor = 'rgba(251, 191, 36, 0.18)';
-    } else if (m.assignedActionStatus === 'QUARANTINED') {
-      strokeColor = '#f43f5e';
-      fillColor = 'rgba(244, 63, 94, 0.14)';
-    } else if (m.assignedActionStatus === 'STOCK_MUTATED') {
-      strokeColor = '#10b981';
-      fillColor = 'rgba(16, 185, 129, 0.13)';
-    } else if (m.assignedActionStatus === 'STUDIO_SYNTHESIZED') {
-      strokeColor = '#38bdf8';
-      fillColor = 'rgba(56, 189, 248, 0.14)';
-    }
 
     const selectMaskForTriage = () => {
       if (m.id === selectedMaskId) {
@@ -705,171 +711,19 @@ export default function App() {
       <div
         key={m.id}
         onClick={selectMaskForTriage}
-        className={`absolute pointer-events-auto cursor-pointer transition-all duration-300 ${statusStyle.replace(/bg-[^\s]+/g, '').replace(/border-[^\s]+/g, '')} ${
-          isActive ? 'scale-[1.03] z-50 drop-shadow-[0_0_20px_rgba(255,255,255,0.8)]' : isSelected ? 'z-40' : ''
+        className={`absolute border-2 rounded-sm pointer-events-auto cursor-pointer transition-all duration-300 ${statusStyle} ${
+          isActive
+            ? 'scale-[1.03] z-50 bg-white/25 border-white shadow-[0_0_30px_rgba(255,255,255,0.85)]'
+            : isSelected
+            ? 'border-amber-400 bg-amber-500/20 z-40 shadow-[0_0_20px_rgba(245,158,11,0.5)]'
+            : ''
         }`}
         style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%`, opacity }}
       >
-        {/* Polygonal 3D Silhouette Overlay fitted to product geometry */}
-        <svg
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
-          style={{ filter: `drop-shadow(0 0 6px ${strokeColor})` }}
-        >
-          {isRamKit ? (
-            <>
-              {/* Stick #1 (Top DIMM Module) */}
-              <polygon
-                points="4,6 97,1 95,43 1,48"
-                fill={fillColor}
-                stroke={strokeColor}
-                strokeWidth="2.2"
-                vectorEffect="non-scaling-stroke"
-              />
-              <line
-                x1="8"
-                y1="44"
-                x2="92"
-                y2="39"
-                stroke={strokeColor}
-                strokeWidth="1"
-                strokeDasharray="3 2"
-                opacity="0.75"
-                vectorEffect="non-scaling-stroke"
-              />
-              {/* Stick #2 (Bottom DIMM Module) */}
-              <polygon
-                points="2,55 98,50 96,95 0,99"
-                fill={fillColor}
-                stroke={strokeColor}
-                strokeWidth="2.2"
-                vectorEffect="non-scaling-stroke"
-              />
-              <line
-                x1="6"
-                y1="95"
-                x2="93"
-                y2="91"
-                stroke={strokeColor}
-                strokeWidth="1"
-                strokeDasharray="3 2"
-                opacity="0.75"
-                vectorEffect="non-scaling-stroke"
-              />
-              <circle cx="4" cy="6" r="2.2" fill={strokeColor} />
-              <circle cx="97" cy="1" r="2.2" fill={strokeColor} />
-              <circle cx="2" cy="55" r="2.2" fill={strokeColor} />
-              <circle cx="96" cy="95" r="2.2" fill={strokeColor} />
-            </>
-          ) : isSsd ? (
-            <>
-              {/* Angled M.2 2280 NVMe Blade Contour */}
-              <polygon
-                points="3,18 95,6 99,34 97,82 4,94 0,56"
-                fill={fillColor}
-                stroke={strokeColor}
-                strokeWidth="2.2"
-                vectorEffect="non-scaling-stroke"
-              />
-              <circle cx="3" cy="18" r="2.2" fill={strokeColor} />
-              <circle cx="95" cy="6" r="2.2" fill={strokeColor} />
-              <circle cx="97" cy="82" r="2.2" fill={strokeColor} />
-              <circle cx="4" cy="94" r="2.2" fill={strokeColor} />
-            </>
-          ) : isCooler ? (
-            <>
-              {/* 3D Isometric Heatsink Tower + Fan Silhouette */}
-              <polygon
-                points="18,2 72,1 97,15 95,86 64,99 7,87 3,16"
-                fill={fillColor}
-                stroke={strokeColor}
-                strokeWidth="2.4"
-                vectorEffect="non-scaling-stroke"
-              />
-              <polyline
-                points="3,16 62,27 97,15"
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth="1.2"
-                strokeDasharray="3 2"
-                opacity="0.75"
-                vectorEffect="non-scaling-stroke"
-              />
-              <ellipse
-                cx="34"
-                cy="56"
-                rx="22"
-                ry="27"
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth="1.2"
-                strokeDasharray="4 2"
-                opacity="0.7"
-                vectorEffect="non-scaling-stroke"
-              />
-              <circle cx="18" cy="2" r="2.3" fill={strokeColor} />
-              <circle cx="72" cy="1" r="2.3" fill={strokeColor} />
-              <circle cx="97" cy="15" r="2.3" fill={strokeColor} />
-              <circle cx="64" cy="99" r="2.3" fill={strokeColor} />
-            </>
-          ) : isPsu ? (
-            <>
-              {/* 3D Isometric ATX PSU Cuboid Silhouette */}
-              <polygon
-                points="14,3 88,2 99,24 97,89 74,99 2,84 1,18"
-                fill={fillColor}
-                stroke={strokeColor}
-                strokeWidth="2.2"
-                vectorEffect="non-scaling-stroke"
-              />
-              <polyline
-                points="1,18 73,31 99,24"
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth="1.1"
-                strokeDasharray="3 2"
-                opacity="0.65"
-                vectorEffect="non-scaling-stroke"
-              />
-              <line
-                x1="73"
-                y1="31"
-                x2="74"
-                y2="99"
-                stroke={strokeColor}
-                strokeWidth="1.1"
-                strokeDasharray="3 2"
-                opacity="0.65"
-                vectorEffect="non-scaling-stroke"
-              />
-              <circle cx="14" cy="3" r="2.2" fill={strokeColor} />
-              <circle cx="88" cy="2" r="2.2" fill={strokeColor} />
-              <circle cx="99" cy="24" r="2.2" fill={strokeColor} />
-              <circle cx="74" cy="99" r="2.2" fill={strokeColor} />
-            </>
-          ) : (
-            <polygon
-              points="7,2 93,2 98,12 98,88 93,98 7,98 2,88 2,12"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth="2.2"
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
-        </svg>
-
-        {/* Sub-module micro-badges for individual RAM sticks */}
-        {isRamKit && (
-          <>
-            <span className="absolute right-1 top-[10%] text-[7px] font-mono font-bold px-1 rounded bg-slate-950/90 text-emerald-300 border border-emerald-500/40 pointer-events-none">
-              DIMM #1
-            </span>
-            <span className="absolute right-1 top-[62%] text-[7px] font-mono font-bold px-1 rounded bg-slate-950/90 text-emerald-300 border border-emerald-500/40 pointer-events-none">
-              DIMM #2
-            </span>
-          </>
-        )}
+        <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-current" />
+        <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-current" />
+        <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-current" />
+        <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-current" />
 
         <div className="absolute -top-6 left-0 text-[10px] bg-slate-950/95 border border-slate-700/70 px-1.5 py-0.5 rounded text-slate-100 whitespace-nowrap font-medium tracking-wide shadow-lg">
           {m.label || m.id}{' '}
@@ -1001,19 +855,60 @@ export default function App() {
       <main className="flex-1 grid grid-cols-12 gap-3 p-3 overflow-hidden min-h-0">
         {/* LEFT COLUMN: SPATIAL FEED */}
         <section className="col-span-5 flex flex-col gap-3 border border-slate-800 bg-[#0A0C10] rounded-xl p-3 relative shadow-lg">
-          <div className="flex items-center justify-between text-[10px] uppercase tracking-widest border-b border-slate-800/80 pb-2">
-            <span className="flex items-center gap-2 font-bold text-slate-300">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-widest border-b border-slate-800/80 pb-2 gap-2">
+            <span className="flex items-center gap-2 font-bold text-slate-300 shrink-0">
               <Camera className="w-4 h-4 text-cyan-500" /> WORKSPACE SPATIAL FEED
             </span>
-            <span
-              className={`px-2 py-0.5 rounded font-bold border ${phase === 'SCANNING_SCENE' ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse' : phase === 'FRAME_LOCKED' || phase === 'EXECUTING_DAG' ? 'bg-rose-950/80 text-rose-300 border-rose-500/50' : 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50'}`}
-            >
-              {phase === 'SCANNING_SCENE'
-                ? 'SCANNING SCENE'
-                : phase === 'FRAME_LOCKED' || phase === 'EXECUTING_DAG'
-                ? 'FRAME LOCKED'
-                : 'LIVE FEED'}
-            </span>
+            <div className="flex items-center gap-1.5 ml-auto">
+              <button
+                type="button"
+                onClick={() => switchBenchScene('/hardware-bench1.jpg')}
+                className={`px-1.5 py-0.5 rounded font-mono text-[8.5px] font-bold border cursor-pointer transition-colors ${
+                  uploadedImage === '/hardware-bench1.jpg'
+                    ? 'bg-cyan-950/70 text-cyan-300 border-cyan-500/60'
+                    : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500'
+                }`}
+                title="Switch to Workbench Lot #1 (Cooler, 2x DDR5 RAM, M.2 NVMe SSD, Modular PSU)"
+              >
+                BENCH #1
+              </button>
+              <button
+                type="button"
+                onClick={() => switchBenchScene('/hardware-bench.jpg')}
+                className={`px-1.5 py-0.5 rounded font-mono text-[8.5px] font-bold border cursor-pointer transition-colors ${
+                  uploadedImage === '/hardware-bench.jpg'
+                    ? 'bg-cyan-950/70 text-cyan-300 border-cyan-500/60'
+                    : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500'
+                }`}
+                title="Switch to Workbench Lot #2 (Dual-Fan GPU, Mini-ITX Motherboard, AMD Ryzen CPU)"
+              >
+                BENCH #2
+              </button>
+              {phase === 'FRAME_LOCKED' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextBench =
+                      uploadedImage === '/hardware-bench.jpg' ? '/hardware-bench1.jpg' : '/hardware-bench.jpg';
+                    switchBenchScene(nextBench);
+                    speakTactical('Inbound lot committed. Advancing to next workbench.');
+                  }}
+                  className="px-2 py-0.5 rounded font-mono text-[8.5px] font-bold border border-emerald-500/70 bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 cursor-pointer transition-all shadow-[0_0_10px_rgba(16,185,129,0.25)]"
+                  title="Confirm current lot into inventory and advance to the next workbench scene"
+                >
+                  ✓ COMMIT LOT & NEXT →
+                </button>
+              )}
+              <span
+                className={`px-2 py-0.5 rounded font-bold border ${phase === 'SCANNING_SCENE' ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse' : phase === 'FRAME_LOCKED' || phase === 'EXECUTING_DAG' ? 'bg-rose-950/80 text-rose-300 border-rose-500/50' : 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50'}`}
+              >
+                {phase === 'SCANNING_SCENE'
+                  ? 'SCANNING SCENE'
+                  : phase === 'FRAME_LOCKED' || phase === 'EXECUTING_DAG'
+                  ? 'FRAME LOCKED'
+                  : 'LIVE FEED'}
+              </span>
+            </div>
           </div>
 
           <div
@@ -1128,6 +1023,8 @@ export default function App() {
 
                 const commitStockWithSku = async (finalSku: string) => {
                   const cleanSku = finalSku.trim().toUpperCase() || activeSku;
+                  let swappedFrom: string | undefined;
+                  let effDelta = isRamMask && !hasPendingTriage ? 2 : 1;
                   try {
                     const res = await fetch(apiUrl('/api/triage/resolve'), {
                       method: 'POST',
@@ -1138,21 +1035,46 @@ export default function App() {
                         name: resolvedProductName,
                         baseCostUsd: resolvedBaseCost,
                         action: 'STOCK',
-                        delta: isRamMask && !hasPendingTriage ? 2 : 1,
+                        delta: effDelta,
                       }),
                     });
                     const data = await res.json();
+                    swappedFrom = data.swappedFromSku as string | undefined;
+                    if (Number(data.effectiveDelta) > 0) {
+                      effDelta = Number(data.effectiveDelta);
+                    }
                     if (data.ok && Array.isArray(data.inventory)) {
-                      setInventory(
-                        data.inventory.map((it: InventoryItem) =>
-                          it.sku === cleanSku
-                            ? {
-                                ...it,
-                                _highlightDelta: hasPendingTriage ? 'CLEARED' : isRamMask ? '+2' : '+1',
-                              }
-                            : it
-                        )
-                      );
+                      setInventory((prev) => {
+                        const prevBadges = new Map(
+                          prev.map((it) => [it.sku, { _highlightDelta: it._highlightDelta, _repriced: it._repriced }])
+                        );
+                        if (swappedFrom) {
+                          prevBadges.delete(swappedFrom);
+                        }
+                        const updated = data.inventory.map((it: InventoryItem) => {
+                          if (it.sku === cleanSku) {
+                            return {
+                              ...it,
+                              _highlightDelta: hasPendingTriage
+                                ? 'CLEARED'
+                                : swappedFrom
+                                ? `OVERRIDE +${effDelta}`
+                                : `+${effDelta}`,
+                              _repriced: prevBadges.get(it.sku)?._repriced,
+                            };
+                          }
+                          const kept = prevBadges.get(it.sku);
+                          return kept ? { ...it, ...kept } : it;
+                        });
+                        const primary = updated.filter((it: InventoryItem) => it.sku === cleanSku);
+                        const otherMutated = updated.filter(
+                          (it: InventoryItem) => it.sku !== cleanSku && (it._highlightDelta || it._repriced)
+                        );
+                        const rest = updated.filter(
+                          (it: InventoryItem) => it.sku !== cleanSku && !it._highlightDelta && !it._repriced
+                        );
+                        return [...primary, ...otherMutated, ...rest];
+                      });
                     }
                     void fetchAuditLedger();
                   } catch (err) {
@@ -1160,11 +1082,18 @@ export default function App() {
                   }
                   updateStep('mutate_inventory', {
                     status: 'MUTATED',
-                    detail: `Supervisor confirmed ${cleanSku} (${resolvedProductName})`,
+                    detail: swappedFrom
+                      ? `Supervisor swapped ${swappedFrom} → ${cleanSku} (+${effDelta}) — ${resolvedProductName}`
+                      : `Supervisor confirmed ${cleanSku} (+${effDelta}) — ${resolvedProductName}`,
                   });
+                  speakTactical(
+                    swappedFrom
+                      ? `Override committed. Swapped ${swappedFrom} to ${cleanSku}.`
+                      : `Stock verified for ${cleanSku}.`
+                  );
                   setActivePulse({
                     id: selectedMaskId,
-                    actionText: hasPendingTriage ? 'CLEARED' : isRamMask ? '+2 STOCK' : '+1 STOCK',
+                    actionText: hasPendingTriage ? 'CLEARED' : `OVERRIDE +${effDelta}`,
                   });
                   setMasks((prev) =>
                     prev.map((m) =>
@@ -1218,7 +1147,7 @@ export default function App() {
 
                     {!triageCustomMode ? (
                       <div className="space-y-1.5 mb-2.5">
-                        <div className="space-y-1 max-h-32 overflow-y-auto pr-0.5">
+                        <div className="space-y-1 max-h-36 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                           {topCandidates.map((cand, idx) => {
                             const selected = cand.sku === activeSku;
                             return (
@@ -1333,7 +1262,7 @@ export default function App() {
                                 name: resolvedProductName,
                                 baseCostUsd: resolvedBaseCost,
                                 action: 'CLAIM',
-                                reason: `Defecto verificado en triaje sobre ${resolvedProductName} (${confirmedSku})`,
+                                reason: `Verified physical defect during supervisor triage on ${resolvedProductName} (${confirmedSku})`,
                                 cropBase64: selectedMask?.cropBase64,
                               }),
                             });
@@ -1449,7 +1378,7 @@ export default function App() {
                 type="button"
                 onClick={() =>
                   setVoiceText(
-                    'Todos los componentes llegaron intactos sin daño; sumá al stock el cooler de torre, los dos módulos RAM y el SSD M.2 y recalculá márgenes al 32%.'
+                    'All components arrived intact with zero physical defects; add the tower cooler, the two DDR5 RAM modules, and the M.2 NVMe SSD to inventory stock, and recalculate prices with a 32% gross margin.'
                   )
                 }
                 className="px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/50 text-[8px] font-mono font-bold text-emerald-300 cursor-pointer transition-colors"
@@ -1461,7 +1390,7 @@ export default function App() {
                 type="button"
                 onClick={() =>
                   setVoiceText(
-                    'Módulo M.2 con etiqueta oculta para triage visual y generá foto de catálogo 512x512 para la fuente modular.'
+                    'The M.2 storage module has an unreadable barcode label—route it to visual triage pending OCR and synthesize a 512x512 studio catalog image for the modular ATX power supply.'
                   )
                 }
                 className="px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-950/30 hover:bg-amber-900/50 text-[8px] font-mono font-bold text-amber-300 cursor-pointer transition-colors"

@@ -18,10 +18,10 @@ Analyze the attached workspace image and the operator voice command. The scene c
    - MANDATORY PII RULE: ALSO inspect the workspace for any shipping label, packing slip, invoice, customer address sticker, employee ID badge, personal phone screen, or human face. Always include every such region in detectedObjects with isSensitivePII: true and label: "PII Label" (or "Operator Face") so the Sharp Crop Gate scrubs those pixels before external export.
    - Ignore unrelated background cases, tools, or furniture.
 2. If the operator refers to a pair or kit of identical items ("dos módulos", "two sticks"), return ONE bounding box covering the pair and ONE mutate_inventory action. Never emit two mutate_inventory actions for the same sku.
-3. label is at most 18 characters. bbox is [xMin, yMin, width, height] normalized 0 to 1.
-   - CRITICAL GEOMETRY RULE: Before writing the JSON, mentally locate the exact [left, top, right, bottom] visual edges of the FULL physical object (including top fan hoods/heatsinks and bottom bases), then compute width = (right - left) and height = (bottom - top).
-   - NON-OVERLAP RULE: Neighboring objects on the table (such as RAM modules next to an M.2 SSD) must NEVER overlap. The right edge (xMin + width) of the left object must end strictly before the xMin of the adjacent object to its right.
-4. Every targetMaskId must match an id in detectedObjects.
+3. label is at most 18 characters (in English). bbox is [xMin, yMin, width, height] normalized 0 to 1.
+   - CRITICAL GEOMETRY RULE: Visually trace the tightest possible [left, top, right, bottom] outer boundary around the FULL physical object (from its topmost edge to its bottommost base, and leftmost edge to rightmost edge), then compute width = (right - left) and height = (bottom - top). Never clip the top of tall objects and never include empty table surface or neighboring items inside the box.
+   - NON-OVERLAP RULE: Separate physical objects on the workbench must NEVER have overlapping bounding boxes. The right edge (xMin + width) of an object must end strictly before the xMin of the adjacent object to its right.
+4. Every targetMaskId must match an id in detectedObjects. Write summary and defectReason in English.
 5. Keep internal thinking under 75 words: pick the closest matching SKU from the ledger immediately without debating alternatives, verify non-overlapping [xMin, yMin, width, height] boxes, and output ONLY the raw JSON object (no markdown, no prose outside JSON).
 6. Match sku and itemName from this ledger when the object is the same kind of product. delta is the count the operator asked to add (a pair = 2), not the number of boxes.
    - RAPID TRIAGE RULE: If the operator asks to add an item that is not in the ledger or says they don't know the exact model/SKU yet, emit mutate_inventory with sku: "SKU-TRIAGE-PENDING" and itemName: "<Object Name> [PENDING OCR TRIAGE]".

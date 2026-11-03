@@ -87,6 +87,11 @@ export const LIVE_STORE_STATE = {
   catalogDrafts: [] as Record<string, unknown>[],
 };
 
+const LAST_MUTATION_BY_MASK_ID = new Map<
+  string,
+  { sku: string; delta: number; previousStock: number }
+>();
+
 const SEED_BY_SKU = new Map(INITIAL_CATALOG.map((item) => [item.sku, item]));
 
 function sanitizeCatalogRecord(doc: Record<string, any>): CatalogSeedItem | null {
@@ -276,6 +281,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     LIVE_STORE_STATE.claims = [];
     LIVE_STORE_STATE.catalogDrafts = [];
   }
+  LAST_MUTATION_BY_MASK_ID.clear();
 
   reply.hijack();
   reply.raw.writeHead(200, {
@@ -351,11 +357,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
         const isIntactTranscript =
-          /\b(intact|intacto|intactos|sin da[ñn]o|zero claim)\b/i.test(voiceTranscript) &&
-          !/\b(aleta|golpead|bent|reclamo)\b/i.test(voiceTranscript);
+          /\b(intact|intacto|intactos|sin da[ñn]o|zero claim|zero physical defects)\b/i.test(voiceTranscript) &&
+          !/\b(aleta|golpead|bent|crushed|reclamo|claim)\b/i.test(voiceTranscript);
         const isTriageOnlyTranscript =
-          /\b(triage|etiqueta oculta|ambiguous|ambiguo)\b/i.test(voiceTranscript) &&
-          !/\b(aleta|golpead|bent)\b/i.test(voiceTranscript);
+          /\b(triage|etiqueta oculta|unreadable barcode|ambiguous|ambiguo)\b/i.test(voiceTranscript) &&
+          !/\b(aleta|golpead|bent|crushed)\b/i.test(voiceTranscript);
 
         const preferredPath = isIntactTranscript
           ? intactFixturePath
@@ -729,6 +735,13 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
           const previousStock = item.stock;
           item.stock += action.delta;
+          if (action.targetMaskId) {
+            LAST_MUTATION_BY_MASK_ID.set(action.targetMaskId, {
+              sku: item.sku,
+              delta: action.delta,
+              previousStock,
+            });
+          }
           LIVE_STORE_STATE.inventory = [
             item,
             ...LIVE_STORE_STATE.inventory.filter((existing) => existing.sku !== item!.sku),
@@ -1106,14 +1119,39 @@ app.post('/api/triage/resolve', async (request, reply) => {
     return reply.send({ ok: true, claim: claimRecord, inventory: LIVE_STORE_STATE.inventory });
   }
 
-  // STOCK resolution: promote SKU-TRIAGE-* if present, otherwise increment/insert SKU.
-  const delta = Number(body.delta) > 0 ? Number(body.delta) : 1;
+  // STOCK resolution & Real Override Swap:
+  // 1) If this maskId was previously assigned to a different SKU by the AI in this session,
+  //    revert that previous SKU's stock so we perform a true swap.
+  const prevMutation = body.maskId ? LAST_MUTATION_BY_MASK_ID.get(body.maskId) : undefined;
+  let swappedFromSku: string | undefined;
+
+  if (prevMutation && prevMutation.sku !== cleanSku) {
+    swappedFromSku = prevMutation.sku;
+    const prevIdx = LIVE_STORE_STATE.inventory.findIndex((i) => i.sku === prevMutation.sku);
+    if (prevIdx !== -1) {
+      const prevItem = LIVE_STORE_STATE.inventory[prevIdx];
+      if (prevItem.sku.startsWith('SKU-TRIAGE-')) {
+        LIVE_STORE_STATE.inventory.splice(prevIdx, 1);
+      } else {
+        prevItem.stock = prevMutation.previousStock;
+        await upsertInventorySnapshot(prevItem);
+      }
+    }
+  }
+
+  const effectiveDelta =
+    prevMutation && prevMutation.delta > 0
+      ? prevMutation.delta
+      : Number(body.delta) > 0
+      ? Number(body.delta)
+      : 1;
   const triageIdx = LIVE_STORE_STATE.inventory.findIndex((i) => i.sku.startsWith('SKU-TRIAGE-'));
   let targetItem = LIVE_STORE_STATE.inventory.find((i) => i.sku === cleanSku);
   const previousStock = targetItem ? targetItem.stock : 0;
 
-  if (triageIdx !== -1) {
+  if (triageIdx !== -1 && !swappedFromSku) {
     const triageItem = LIVE_STORE_STATE.inventory[triageIdx];
+    swappedFromSku = triageItem.sku;
     LIVE_STORE_STATE.inventory.splice(triageIdx, 1);
     try {
       const db = await getPersistenceDb();
@@ -1126,28 +1164,45 @@ app.post('/api/triage/resolve', async (request, reply) => {
       targetItem = {
         sku: cleanSku,
         name: body.name ? body.name : `${cleanSku} (Verified)`,
-        stock: triageItem.stock || delta,
-        standardInboundLot: delta,
+        stock: triageItem.stock || effectiveDelta,
+        standardInboundLot: effectiveDelta,
         baseCostUsd: resolvedBase,
         sellPriceUsd: Number((resolvedBase * 1.45).toFixed(2)),
       };
-      LIVE_STORE_STATE.inventory.unshift(targetItem);
     } else {
-      targetItem.stock += triageItem.stock || delta;
+      targetItem.stock += triageItem.stock || effectiveDelta;
     }
   } else if (targetItem) {
-    targetItem.stock += delta;
+    if (prevMutation && prevMutation.sku === cleanSku) {
+      // Already assigned to this SKU; keep current stock unless explicit delta override
+      targetItem.stock = prevMutation.previousStock + effectiveDelta;
+    } else {
+      targetItem.stock += effectiveDelta;
+    }
   } else {
     const resolvedBase = validCustomCost ?? 85.0;
     targetItem = {
       sku: cleanSku,
       name: body.name || cleanSku,
-      stock: delta,
-      standardInboundLot: delta,
+      stock: effectiveDelta,
+      standardInboundLot: effectiveDelta,
       baseCostUsd: resolvedBase,
       sellPriceUsd: Number((resolvedBase * 1.45).toFixed(2)),
     };
-    LIVE_STORE_STATE.inventory.unshift(targetItem);
+  }
+
+  // Always promote the supervisor-verified item to Row #1 of LIVE_STORE_STATE.inventory
+  LIVE_STORE_STATE.inventory = [
+    targetItem,
+    ...LIVE_STORE_STATE.inventory.filter((existing) => existing.sku !== targetItem!.sku),
+  ];
+
+  if (body.maskId) {
+    LAST_MUTATION_BY_MASK_ID.set(body.maskId, {
+      sku: targetItem.sku,
+      delta: effectiveDelta,
+      previousStock,
+    });
   }
 
   await upsertInventorySnapshot(targetItem);
@@ -1155,8 +1210,9 @@ app.post('/api/triage/resolve', async (request, reply) => {
     eventType: 'SUPERVISOR_TRIAGE_RESOLVED',
     sku: targetItem.sku,
     name: targetItem.name,
+    swappedFromSku,
     targetMaskId: body.maskId,
-    delta,
+    delta: effectiveDelta,
     newStock: targetItem.stock,
     baseCostUsd: targetItem.baseCostUsd,
     sellPriceUsd: targetItem.sellPriceUsd,
@@ -1164,12 +1220,20 @@ app.post('/api/triage/resolve', async (request, reply) => {
   appendAuditBlock({
     type: 'SUPERVISOR_TRIAGE',
     skuOrRef: targetItem.sku,
-    summary: `Supervisor triage verified ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock}`,
+    summary: swappedFromSku
+      ? `Supervisor override swapped ${swappedFromSku} -> ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock} (+${effectiveDelta})`
+      : `Supervisor triage verified ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock} (+${effectiveDelta})`,
     undo: { kind: 'RESTORE_STOCK', sku: targetItem.sku, previousStock },
   });
   await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
-  return reply.send({ ok: true, item: targetItem, inventory: LIVE_STORE_STATE.inventory });
+  return reply.send({
+    ok: true,
+    item: targetItem,
+    swappedFromSku,
+    effectiveDelta,
+    inventory: LIVE_STORE_STATE.inventory,
+  });
 });
 
 app.post('/api/voice/transcribe', async (request, reply) => {
@@ -1202,6 +1266,13 @@ app.post('/api/voice/transcribe', async (request, reply) => {
 
   try {
     const catalogKeywords: string[] = [
+      'tower cooler',
+      'crushed heatsink fin',
+      'supplier claim',
+      'add to stock',
+      'studio catalog photo',
+      'modular power supply',
+      'recalculate prices',
       'sumá al stock',
       'armame la foto',
       'abrí reclamo',
@@ -1309,6 +1380,7 @@ app.post('/api/reset-demo', async (_request, reply) => {
   LIVE_STORE_STATE.inventory = cloneInitialCatalog();
   LIVE_STORE_STATE.claims = [];
   LIVE_STORE_STATE.catalogDrafts = [];
+  LAST_MUTATION_BY_MASK_ID.clear();
   resetAuditLedger();
   await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, []);
   try {
