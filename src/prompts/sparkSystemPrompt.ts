@@ -23,7 +23,7 @@ Analyze the attached workspace image and the operator voice command. The scene c
 6. Match sku and itemName from this ledger when the object is the same kind of product. delta is the count the operator asked to add (a pair = 2), not the number of boxes.
    - RAPID TRIAGE RULE: If the operator asks to add an item that is not in the ledger or says they don't know the exact model/SKU yet, emit mutate_inventory with sku: "SKU-TRIAGE-PENDING" and itemName: "<Object Name> [PENDING OCR TRIAGE]".
 7. If the operator names a margin percent, use that number. taxRatePercent is 21 unless they say otherwise.
-8. claimAmountUsd: if the operator states an amount, use it. Otherwise use the matched ledger baseCostUsd. If the damaged object is not in the ledger, use 65.
+8. claimAmountUsd: if the operator explicitly states a dollar amount, use it. Otherwise, for damaged hardware/coolers default to 65 (or matched ledger baseCostUsd ONLY if baseCostUsd >= 65) so high-value hardware claims are audited by the $50 zero-trust guardrail.
 9. visualDna strings only. exactColorPalette is one sentence, never an array.
 10. Emit at most one mutate_inventory per sku.
 

@@ -122,22 +122,32 @@ function clampBBox(raw: number[]): [number, number, number, number] {
   ];
 }
 
-function categoryOf(text: string): string | null {
-  const hay = text.toLowerCase();
-  if (/ram|ddr|memoria|fury/.test(hay)) return 'memory';
-  if (/ssd|nvme|disco|m\.?2/.test(hay)) return 'storage';
-  if (/cooler|aio|ventilador|heatsink/.test(hay)) return 'cooler';
-  if (/fuente|psu|power/.test(hay)) return 'psu';
-  return null;
-}
-
-function findExistingInventoryItem<T extends { sku: string; name: string }>(
+function findBestInventoryMatch<T extends { sku: string; name: string }>(
   inventory: T[],
-  hint: string
+  hint: { sku?: string; itemName?: string; label?: string }
 ): T | undefined {
-  const wanted = categoryOf(hint);
-  if (!wanted) return undefined;
-  return inventory.find((item) => categoryOf(`${item.sku} ${item.name}`) === wanted);
+  const normalize = (str: string) => str.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  const hintTokens = new Set([
+    ...normalize(hint.sku || ''),
+    ...normalize(hint.itemName || ''),
+    ...normalize(hint.label || '')
+  ]);
+
+  if (hintTokens.size === 0) return undefined;
+
+  let bestMatch: T | undefined;
+  let highestScore = 0;
+
+  for (const item of inventory) {
+    const itemTokens = normalize(`${item.sku} ${item.name}`);
+    const score = itemTokens.filter(token => hintTokens.has(token)).length;
+    if (score > highestScore) {
+      highestScore = score;
+      bestMatch = item;
+    }
+  }
+
+  return bestMatch;
 }
 
 function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
@@ -158,7 +168,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     'El cooler de torre vino con una aleta golpeada, abrí reclamo. Sumá al stock las memorias RAM y armá foto de estudio para la fuente modular.';
 
   if (body.resetBeforeRun !== false) {
-    LIVE_STORE_STATE.inventory = INITIAL_INVENTORY();
+    // Si reseteamos al principio de un run, limpiamos basuras
     LIVE_STORE_STATE.claims = [];
     LIVE_STORE_STATE.catalogDrafts = [];
   }
@@ -247,7 +257,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
       const matched =
         LIVE_STORE_STATE.inventory.find((i) => i.sku === act.sku) ||
-        findExistingInventoryItem(LIVE_STORE_STATE.inventory, `${act.sku} ${act.itemName || ''}`);
+        findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: act.sku, itemName: act.itemName });
       const skuKey = matched?.sku || act.sku;
       const prevIdx = seenSkuIndex.get(skuKey);
       if (prevIdx === undefined) {
@@ -326,7 +336,29 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       (a, b) => (ACTION_PRIORITY[a.tool] || 99) - (ACTION_PRIORITY[b.tool] || 99)
     );
 
-    const toolPromises = orderedActions.map(async (action) => {
+    async function runIsolatedToolNode<T>(
+      toolName: string,
+      timeoutMs: number,
+      task: () => Promise<T>
+    ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const value = await Promise.race([
+          task(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${toolName} timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+        return { ok: true, value };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown tool execution error';
+        return { ok: false, error: message };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
+    const toolPromises = orderedActions.map(action => runIsolatedToolNode(action.tool, 15000, async () => {
       if (action.tool === 'quarantine_and_claim') {
         const targetObj = normalizedObjects.find((o) => o.id === action.targetMaskId) || normalizedObjects[0];
         const ticketId = `CLM-${Math.floor(100 + Math.random() * 900)}`;
@@ -371,7 +403,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         const hint = `${action.sku} ${action.itemName || ''} ${targetObj?.label || ''}`;
         let item =
           LIVE_STORE_STATE.inventory.find((i) => i.sku === action.sku) ||
-          findExistingInventoryItem(LIVE_STORE_STATE.inventory, hint);
+          findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName, label: targetObj?.label });
 
         if (!item) {
           item = {
@@ -466,10 +498,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         }
 
         // Buscar primero por el nombre/sku del prompt o usar el último item agregado al inventario
-        const targetHint = categoryOf(action.sku || action.itemName || '');
-        const priced = targetHint
-          ? LIVE_STORE_STATE.inventory.find(i => categoryOf(`${i.sku} ${i.name}`) === targetHint)
-          : LIVE_STORE_STATE.inventory[0];
+        const priced =
+          findBestInventoryMatch(LIVE_STORE_STATE.inventory, { sku: action.sku, itemName: action.itemName }) ||
+          LIVE_STORE_STATE.inventory[0];
 
         const baseRefCost = priced?.baseCostUsd || 95;
         const vmResult = executeMuseCodeMarginCalc(
@@ -495,9 +526,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           result: { ...vmResult, updatedSku: priced?.sku || 'SKU-DDR5-32GB-KIT' },
         });
       }
-    });
+    }));
 
-    await Promise.all(toolPromises);
+    await Promise.allSettled(toolPromises);
 
     sendEvent('ORCHESTRATION_COMPLETE', {
       totalElapsedMs: Date.now() - startedAt,
