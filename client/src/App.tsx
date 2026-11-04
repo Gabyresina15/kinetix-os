@@ -389,14 +389,21 @@ export default function App() {
               segmenter: data.samUsed ? 'SAM 3.1 IoU' : 'Sharp crop',
               piiRedacted: redactedCount,
             }));
-            updateStep('sam_lock', {
-              status: 'MUTATED',
-              model: data.samUsed ? 'SAM 3.1 (IoU Box Refinement)' : 'Muse Spark Vision + Sharp Cropper',
-              latencyMs: data.samUsed ? data.samLatencyMs : data.latencyMs,
-              detail: data.samUsed
-                ? `SAM 3.1 refined ${data.samRefined} bounding boxes via IoU`
-                : `${incomingObjects.length} actionable objects cropped (${redactedCount} PII shields)`,
-            });
+            if ((data as any).preliminary) {
+              updateStep('sam_lock', {
+                status: 'RUNNING',
+                detail: `Locked ${incomingObjects.length} preliminary boxes · refining IoU with SAM 3.1...`,
+              });
+            } else {
+              updateStep('sam_lock', {
+                status: 'MUTATED',
+                model: data.samUsed ? 'SAM 3.1 (IoU Box Refinement)' : 'Muse Spark Vision + Sharp Cropper',
+                latencyMs: data.samUsed ? data.samLatencyMs : data.latencyMs,
+                detail: data.samUsed
+                  ? `SAM 3.1 refined ${data.samRefined} bounding boxes via IoU`
+                  : `${incomingObjects.length} actionable objects cropped (${redactedCount} PII shields)`,
+              });
+            }
             updateStep('spark_plan', { status: 'RUNNING' });
             setPhase('EXECUTING_DAG');
           });
@@ -418,11 +425,9 @@ export default function App() {
         }
 
         if (event === 'SPARK_PLAN_LOCKED') {
-          const plannedTools = new Set<string>(
-            Array.isArray((data.plan as any)?.actions)
-              ? (data.plan as any).actions.map((a: any) => String(a.tool))
-              : []
-          );
+          const actionsList: any[] = Array.isArray((data.plan as any)?.actions) ? (data.plan as any).actions : [];
+          const plannedTools = new Set<string>(actionsList.map((a: any) => String(a.tool)));
+          const studioAction = actionsList.find((a: any) => a.tool === 'generate_studio_catalog');
           enqueue(() => {
             setTelemetry((t) => ({ ...t, sparkMs: data.latencyMs || t.sparkMs }));
             updateStep('spark_plan', {
@@ -430,6 +435,35 @@ export default function App() {
               latencyMs: data.latencyMs,
               detail: data.plan?.summary || 'Spatial plan locked',
             });
+
+            if (studioAction) {
+              setMasks((currentMasks) => {
+                const targetMask =
+                  currentMasks.find((m) => m.id === studioAction.targetMaskId) ||
+                  currentMasks[currentMasks.length - 1];
+                if (targetMask?.cropBase64) {
+                  setLatestCatalog((prev) =>
+                    prev?.studioImageUrl
+                      ? prev
+                      : {
+                          id: 'CAT-PREVIEW',
+                          maskId: targetMask.id,
+                          title: studioAction.productTitle || targetMask.label || 'Studio Catalog Asset',
+                          visualDna: studioAction.visualDna,
+                          promptUsed: '',
+                          sourceCropUrl: targetMask.cropBase64!,
+                          modelUsed: 'Muse Image 1.0 (512x512)',
+                          studioImageUrl: '',
+                          usedLiveApi: true,
+                          resolution: '512x512',
+                          synthesisLatencyMs: 0,
+                          status: 'SYNTHESIZING',
+                        }
+                  );
+                }
+                return currentMasks;
+              });
+            }
 
             ['quarantine_and_claim', 'mutate_inventory', 'generate_studio_catalog', 'recalculate_margins_vm'].forEach(
               (id) =>
@@ -569,6 +603,7 @@ export default function App() {
                 model: normalizedVm.policyModelUsed || 'Muse Code / Wonder + 50ms Sandbox',
                 detail: detailText,
               });
+              setPhase('FRAME_LOCKED');
             }
           });
         }
@@ -1729,17 +1764,28 @@ export default function App() {
                       AFTER // MUSE IMAGE 512x512
                     </div>
                     <div className="relative rounded border border-cyan-800/60 overflow-hidden aspect-video bg-[#050608] shadow-[0_0_12px_rgba(34,211,238,0.15)] group">
-                      <img src={latestCatalog.studioImageUrl} alt="Studio" className="w-full h-full object-cover" />
-                      <div className="absolute top-1 right-1 bg-cyan-950/80 backdrop-blur border border-cyan-500/50 px-1 py-0.5 rounded-[2px] text-[8px] font-mono text-cyan-300">
-                        {latestCatalog.resolution || (latestCatalog.usedLiveApi ? '512x512' : 'SVG_FALLBACK')}
-                      </div>
-                      <a
-                        href={latestCatalog.studioImageUrl}
-                        download={`Studio-Render-${latestCatalog.title.replace(/\s+/g, '-')}.png`}
-                        className="absolute inset-0 bg-cyan-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-cyan-300 font-bold text-[10px] tracking-widest gap-2 backdrop-blur-sm cursor-pointer"
-                      >
-                        <Download className="w-4 h-4" /> DOWNLOAD STUDIO ASSET
-                      </a>
+                      {latestCatalog.studioImageUrl ? (
+                        <>
+                          <img src={latestCatalog.studioImageUrl} alt="Studio" className="w-full h-full object-cover" />
+                          <div className="absolute top-1 right-1 bg-cyan-950/80 backdrop-blur border border-cyan-500/50 px-1 py-0.5 rounded-[2px] text-[8px] font-mono text-cyan-300">
+                            {latestCatalog.resolution || (latestCatalog.usedLiveApi ? '512x512' : 'SVG_FALLBACK')}
+                          </div>
+                          <a
+                            href={latestCatalog.studioImageUrl}
+                            download={`Studio-Render-${latestCatalog.title.replace(/\s+/g, '-')}.png`}
+                            className="absolute inset-0 bg-cyan-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-cyan-300 font-bold text-[10px] tracking-widest gap-2 backdrop-blur-sm cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" /> DOWNLOAD STUDIO ASSET
+                          </a>
+                        </>
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 bg-cyan-950/20 text-cyan-300 p-2 text-center">
+                          <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+                          <span className="text-[8.5px] font-mono uppercase tracking-wider">
+                            SYNTHESIZING 512x512 STUDIO RENDER...
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

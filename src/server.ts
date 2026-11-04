@@ -409,6 +409,45 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     // while preserving the full 1920px HD frame locally in Sharp for crystal-clear crops & Telegram plates
     const visionApiFrameBase64 = await downscaleFrameForVisionApi(body.frameBase64);
 
+    // Pre-warm Muse Wonder 1.0 at t=0ms on Meta API while Baseten runs Muse Spark Open (Meta API is 100% idle here!)
+    const earlyMarginMatch = voiceTranscript.match(
+      /(\d+(?:\.\d+)?)\s*%\s*(?:gross\s*)?(?:margin|margen)|(?:margin|margen)\s*(?:of|de|al|con)?\s*(\d+(?:\.\d+)?)\s*%/i
+    );
+    const earlyMarginPercent = earlyMarginMatch ? Number(earlyMarginMatch[1] || earlyMarginMatch[2]) : 32;
+    const earlyHasCriticalClaim =
+      /\b(crushed|bent|damaged|broken|defect|claim|golpead|aleta|roto|reclamo)\b/i.test(voiceTranscript) &&
+      !/\b(intact|intacto|sin da[ñn]o|zero claim|zero physical defects)\b/i.test(voiceTranscript);
+
+    const earlyMuseCodePromise: Promise<{
+      code: string;
+      modelUsed: string;
+      llmSynthMs: number;
+    } | null> =
+      mode === 'LIVE' && (hasMetaKey || hasBasetenKey)
+        ? (async () => {
+            const synthStarted = Date.now();
+            try {
+              const synth = await callMuseCodeGenerator(
+                earlyMarginPercent,
+                21,
+                voiceTranscript,
+                undefined,
+                earlyHasCriticalClaim
+                  ? { hasCriticalClaim: true, defectSeverity: 'CRITICAL', damageFactor: 0.85 }
+                  : undefined
+              );
+              return {
+                code: synth.code,
+                modelUsed: synth.modelUsed,
+                llmSynthMs: Date.now() - synthStarted,
+              };
+            } catch (codeErr) {
+              app.log.warn(`Early policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
+              return null;
+            }
+          })()
+        : Promise.resolve(null);
+
     if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
         const isBench2Transcript =
@@ -558,6 +597,12 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
+
+    // Ensure t=0ms Muse Wonder has settled before calling SAM 3.1 so Meta API never queues concurrent requests
+    if (mode === 'LIVE' && hasMetaKey) {
+      await earlyMuseCodePromise.catch(() => null);
+    }
+
     const sam = mode === 'LIVE' && hasMetaKey
       ? await refineMasksWithSam31(visionApiFrameBase64, finalMasks)
       : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
@@ -637,42 +682,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    // Pre-warm Muse Code / Wonder LLM synthesis in parallel with Stage 1 so Stage 2 sandbox execution is near-instant
-    const repriceActionPlan = activePlan.actions.find((a) => a.tool === 'recalculate_margins_vm');
-    const claimActionPlan = activePlan.actions.find((a) => a.tool === 'quarantine_and_claim');
-    const prewarmedMuseCodePromise: Promise<{
-      code: string;
-      modelUsed: string;
-      llmSynthMs: number;
-    } | null> =
-      repriceActionPlan && repriceActionPlan.tool === 'recalculate_margins_vm' && mode === 'LIVE' && (hasMetaKey || hasBasetenKey)
-        ? (async () => {
-            const synthStarted = Date.now();
-            try {
-              const synth = await callMuseCodeGenerator(
-                repriceActionPlan.targetMarginPercent,
-                repriceActionPlan.taxRatePercent,
-                voiceTranscript,
-                undefined,
-                claimActionPlan && claimActionPlan.tool === 'quarantine_and_claim'
-                  ? {
-                      hasCriticalClaim: (claimActionPlan.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD,
-                      defectSeverity: claimActionPlan.defectSeverity,
-                      damageFactor: claimActionPlan.damageFactor,
-                    }
-                  : undefined
-              );
-              return {
-                code: synth.code,
-                modelUsed: synth.modelUsed,
-                llmSynthMs: Date.now() - synthStarted,
-              };
-            } catch (codeErr) {
-              app.log.warn(`Policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
-              return null;
-            }
-          })()
-        : Promise.resolve(null);
+    // Reuse t=0ms Muse Wonder policy synthesis (already resolved during Baseten Spark Open scan)
+    const prewarmedMuseCodePromise = earlyMuseCodePromise;
 
     async function runIsolatedToolNode<T>(
       toolName: string,
@@ -1078,20 +1089,43 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       });
     };
 
-    // Group actions by dependency stage and execute independent nodes concurrently via Promise.allSettled
-    const actionsByStage = new Map<number, OrchestrationPlan['actions']>();
-    for (const action of activePlan.actions) {
-      const stage = ACTION_DEPENDENCY_STAGE[action.tool] ?? 2;
-      const list = actionsByStage.get(stage) || [];
-      list.push(action);
-      actionsByStage.set(stage, list);
-    }
+    // Decouple Fast ERP Track (quarantine_and_claim + mutate_inventory -> recalculate_margins_vm)
+    // from Studio Catalog Image Synthesis (generate_studio_catalog) so Stage 2 50ms Sandbox Repricing
+    // completes immediately (~15ms after SPATIAL_LOCK) instead of waiting ~9s for the 512x512 studio photo.
+    const fastStage1Actions = activePlan.actions.filter(
+      (action) => action.tool === 'quarantine_and_claim' || action.tool === 'mutate_inventory'
+    );
+    const stage2RepriceActions = activePlan.actions.filter(
+      (action) => action.tool === 'recalculate_margins_vm'
+    );
+    const studioCatalogActions = activePlan.actions.filter(
+      (action) => action.tool === 'generate_studio_catalog'
+    );
 
-    const sortedStages = Array.from(actionsByStage.keys()).sort((a, b) => a - b);
-    for (const stage of sortedStages) {
-      const stageActions = actionsByStage.get(stage) || [];
-      await Promise.allSettled(stageActions.map((action) => executeActionNode(action, stage)));
-    }
+    const fastErpTrackPromise = (async () => {
+      if (fastStage1Actions.length > 0) {
+        await Promise.allSettled(
+          fastStage1Actions.map((action) =>
+            executeActionNode(action, ACTION_DEPENDENCY_STAGE[action.tool] ?? 1)
+          )
+        );
+      }
+      if (stage2RepriceActions.length > 0) {
+        await Promise.allSettled(
+          stage2RepriceActions.map((action) =>
+            executeActionNode(action, ACTION_DEPENDENCY_STAGE[action.tool] ?? 2)
+          )
+        );
+      }
+    })();
+
+    const studioCatalogTrackPromise = Promise.allSettled(
+      studioCatalogActions.map((action) =>
+        executeActionNode(action, ACTION_DEPENDENCY_STAGE[action.tool] ?? 1)
+      )
+    );
+
+    await Promise.allSettled([fastErpTrackPromise, studioCatalogTrackPromise]);
 
     await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 

@@ -9,6 +9,10 @@ export function buildMuseSparkSystemPrompt(
     baseCostUsd: number;
   }>
 ): string {
+  const compactLedger = currentInventoryContext
+    .map((item) => `${item.sku} | ${item.name} | baseCost:$${item.baseCostUsd} | stock:${item.stock}`)
+    .join('\n');
+
   return `You are KINETIX-CORE (powered by Meta Muse Spark Open), a Spatial ERP Orchestrator.
 Analyze the attached workspace image and the operator voice command. The scene can be any domain. Do not assume a specific product catalog beyond the ledger below.
 
@@ -30,8 +34,8 @@ Analyze the attached workspace image and the operator voice command. The scene c
 9. visualDna strings only. exactColorPalette is one sentence, never an array.
 10. Emit at most one mutate_inventory per sku.
 
-### CURRENT ERP INVENTORY LEDGER
-${JSON.stringify(currentInventoryContext, null, 2)}
+### CURRENT ERP INVENTORY LEDGER (SKU | Name | baseCost | stock)
+${compactLedger}
 
 ### OUTPUT JSON CONTRACT
 {

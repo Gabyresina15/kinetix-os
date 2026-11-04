@@ -299,8 +299,9 @@ export async function callBasetenMuseSparkOpen(
     body: JSON.stringify({
       model,
       temperature: 0.1,
-      max_tokens: 4096,
+      max_tokens: 2048,
       stream: true,
+      ...(useBaseten ? { reasoning_effort: 'low' } : {}),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
@@ -725,7 +726,8 @@ export async function callMuseCodeGenerator(
     body: JSON.stringify({
       model,
       temperature: 0,
-      max_tokens: 4096,
+      max_tokens: 1500,
+      reasoning_effort: 'low',
       messages: [
         {
           role: 'system',
