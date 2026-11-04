@@ -1253,29 +1253,29 @@ export default function App() {
                 };
 
                 return (
-                  <div className="absolute bottom-3 right-3 bg-slate-950/95 border border-amber-500/60 rounded-lg p-3 w-[348px] shadow-[0_0_36px_rgba(0,0,0,0.95)] backdrop-blur-md z-50 animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-start mb-2 border-b border-slate-800 pb-1.5">
-                      <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
-                        <Scan className="w-3 h-3" /> SUPERVISOR TRIAGE & OVERRIDE
+                  <div className="absolute bottom-3 right-3 bg-slate-950/95 border border-amber-500/60 rounded-xl p-4 w-[410px] shadow-[0_0_42px_rgba(0,0,0,0.95)] backdrop-blur-md z-50 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-2.5 border-b border-slate-800 pb-2">
+                      <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
+                        <Scan className="w-3.5 h-3.5" /> SUPERVISOR TRIAGE & OVERRIDE
                       </span>
                       <button
                         onClick={() => setSelectedMaskId(null)}
                         className="text-slate-500 hover:text-white cursor-pointer"
                       >
-                        <XCircle className="w-3.5 h-3.5" />
+                        <XCircle className="w-4 h-4" />
                       </button>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-200 mb-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-slate-100 mb-2.5">
                       <span className="truncate">{rawLabel}</span>
-                      <span className="text-[9px] font-mono text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/50">
+                      <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/50">
                         AI: {((selectedMask?.confidence ?? 0.95) * 100).toFixed(0)}%
                       </span>
                     </div>
 
                     {/* Mode switcher: Catalog Matches vs + Add New SKU */}
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">
                         {triageCustomMode
                           ? 'CREATE NEW CATALOG SKU'
                           : triageCategoryFilter === 'MATCHED' && !searchTrimmed
@@ -1285,7 +1285,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setTriageCustomMode((prev) => !prev)}
-                        className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border cursor-pointer transition-colors ${
+                        className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded border cursor-pointer transition-colors ${
                           triageCustomMode
                             ? 'border-cyan-500/50 bg-cyan-950/40 text-cyan-300'
                             : 'border-amber-500/50 bg-amber-950/40 text-amber-300 hover:bg-amber-900/50'
@@ -1296,7 +1296,7 @@ export default function App() {
                     </div>
 
                     {!triageCustomMode ? (
-                      <div className="space-y-1.5 mb-2.5">
+                      <div className="space-y-2 mb-3">
                         {/* Tactical Search Input */}
                         <div className="relative">
                           <input
@@ -1304,13 +1304,13 @@ export default function App() {
                             value={triageSearchQuery}
                             onChange={(e) => setTriageSearchQuery(e.target.value)}
                             placeholder="Filter 31 SKUs by brand, model or code..."
-                            className="w-full bg-slate-900/90 border border-slate-700/80 rounded px-2.5 py-1 text-[9.5px] font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 transition-colors"
+                            className="w-full bg-slate-900/90 border border-slate-700/80 rounded-md px-3 py-1.5 text-[10.5px] font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 transition-colors"
                           />
                           {triageSearchQuery && (
                             <button
                               type="button"
                               onClick={() => setTriageSearchQuery('')}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] font-mono text-slate-400 hover:text-white cursor-pointer"
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-mono text-slate-400 hover:text-white cursor-pointer"
                             >
                               ✕
                             </button>
@@ -1318,7 +1318,7 @@ export default function App() {
                         </div>
 
                         {/* Category Filter Pills */}
-                        <div className="flex items-center gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                           {(
                             [
                               { id: 'MATCHED', label: 'AI TOP 3' },
@@ -1338,7 +1338,7 @@ export default function App() {
                                 key={pill.id}
                                 type="button"
                                 onClick={() => setTriageCategoryFilter(pill.id)}
-                                className={`px-1.5 py-0.5 rounded font-mono text-[8px] font-bold border shrink-0 cursor-pointer transition-colors ${
+                                className={`px-2 py-1 rounded font-mono text-[9px] font-bold border shrink-0 cursor-pointer transition-colors ${
                                   activePill
                                     ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/60 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
                                     : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:border-slate-600 hover:text-slate-200'
@@ -1351,7 +1351,7 @@ export default function App() {
                         </div>
 
                         {/* Custom HUD SKU Cards (No native Windows <select> or white scrollbar) */}
-                        <div className="space-y-1 max-h-44 overflow-y-auto pr-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                           {visibleCandidates.map((cand) => {
                             const selected = cand.sku === activeSku;
                             const isTopAiMatch = cand.sku === topCandidates[0]?.sku;
@@ -1360,42 +1360,42 @@ export default function App() {
                                 key={cand.sku}
                                 type="button"
                                 onClick={() => setTriageSkuChoice(cand.sku)}
-                                className={`w-full text-left px-2.5 py-1.5 rounded border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                className={`w-full text-left px-3 py-2 rounded-md border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
                                   selected
-                                    ? 'border-amber-400 bg-amber-950/35 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)]'
+                                    ? 'border-amber-400 bg-amber-950/35 text-amber-100 shadow-[0_0_12px_rgba(251,191,36,0.22)]'
                                     : 'border-slate-800/90 bg-slate-900/85 text-slate-300 hover:border-cyan-500/40 hover:bg-slate-900'
                                 }`}
                               >
                                 <div className="min-w-0 flex-1">
-                                  <div className="text-[10px] font-bold truncate flex items-center gap-1">
+                                  <div className="text-[11px] font-bold truncate flex items-center gap-1.5">
                                     {isTopAiMatch && (
-                                      <span className="text-[7px] px-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono shrink-0">
+                                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono shrink-0">
                                         TOP AI
                                       </span>
                                     )}
                                     <span className="truncate">{cand.name}</span>
                                   </div>
-                                  <div className="text-[8.5px] font-mono text-slate-400 truncate">
+                                  <div className="text-[9.5px] font-mono text-slate-400 truncate mt-0.5">
                                     <span className="text-cyan-400/90">{cand.sku}</span> · Base ${cand.baseCostUsd.toFixed(0)} · Stock {cand.stock}u
                                   </div>
                                 </div>
-                                <span className="text-[9.5px] font-mono font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.5 rounded shrink-0">
+                                <span className="text-[10.5px] font-mono font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded shrink-0">
                                   ${cand.sellPriceUsd.toFixed(2)}
                                 </span>
                               </button>
                             );
                           })}
                           {visibleCandidates.length === 0 && (
-                            <div className="text-[9.5px] font-mono text-slate-500 text-center py-4 border border-dashed border-slate-800 rounded">
+                            <div className="text-[10px] font-mono text-slate-500 text-center py-4 border border-dashed border-slate-800 rounded">
                               No catalog SKU matches "{triageSearchQuery}". Click "+ NEW SKU NOT IN LIST" above.
                             </div>
                           )}
                         </div>
                       </div>
                     ) : (
-                      <div className="space-y-1.5 mb-2.5 bg-slate-900/70 border border-slate-800 rounded p-2">
+                      <div className="space-y-2 mb-3 bg-slate-900/70 border border-slate-800 rounded-md p-2.5">
                         <div>
-                          <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                          <label className="block text-[8.5px] uppercase tracking-wider text-slate-400 font-bold mb-1">
                             New SKU Code
                           </label>
                           <input
@@ -1403,12 +1403,12 @@ export default function App() {
                             value={triageNewSku}
                             onChange={(e) => setTriageNewSku(e.target.value.toUpperCase())}
                             placeholder="SKU-BRAND-MODEL"
-                            className="w-full bg-slate-950 border border-amber-500/50 rounded px-2 py-1 text-[9.5px] font-mono text-amber-200 focus:outline-none focus:border-cyan-400"
+                            className="w-full bg-slate-950 border border-amber-500/50 rounded px-2.5 py-1.5 text-[10.5px] font-mono text-amber-200 focus:outline-none focus:border-cyan-400"
                           />
                         </div>
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div className="grid grid-cols-3 gap-2">
                           <div className="col-span-2">
-                            <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                            <label className="block text-[8.5px] uppercase tracking-wider text-slate-400 font-bold mb-1">
                               Brand & Full Model
                             </label>
                             <input
@@ -1416,30 +1416,30 @@ export default function App() {
                               value={triageNewName}
                               onChange={(e) => setTriageNewName(e.target.value)}
                               placeholder="e.g. Kingston Fury DDR5 32GB"
-                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[9.5px] text-slate-200 focus:outline-none focus:border-cyan-400"
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-[10.5px] text-slate-200 focus:outline-none focus:border-cyan-400"
                             />
                           </div>
                           <div>
-                            <label className="block text-[7.5px] uppercase tracking-wider text-slate-400 font-bold mb-0.5">
+                            <label className="block text-[8.5px] uppercase tracking-wider text-slate-400 font-bold mb-1">
                               Cost ($ USD)
                             </label>
                             <input
                               type="number"
                               value={triageNewCost}
                               onChange={(e) => setTriageNewCost(e.target.value)}
-                              className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[9.5px] font-mono text-emerald-300 focus:outline-none focus:border-cyan-400"
+                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-[10.5px] font-mono text-emerald-300 focus:outline-none focus:border-cyan-400"
                             />
                           </div>
                         </div>
                       </div>
                     )}
 
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2">
                       <button
                         onClick={() => void commitStockWithSku(activeSku)}
-                        className="w-full py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700 rounded text-[10px] font-bold text-emerald-300 uppercase tracking-widest transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-2 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700 rounded-md text-[11px] font-bold text-emerald-300 uppercase tracking-widest transition-colors flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <Package className="w-3 h-3" />{' '}
+                        <Package className="w-3.5 h-3.5" />{' '}
                         {triageCustomMode
                           ? 'CREATE SKU & ADD STOCK'
                           : hasPendingTriage
@@ -1487,9 +1487,9 @@ export default function App() {
                           setTimeout(() => setActivePulse(null), 350);
                           setSelectedMaskId(null);
                         }}
-                        className="w-full py-1.5 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 rounded text-[10px] font-bold text-rose-300 uppercase tracking-widest transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-2 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 rounded-md text-[11px] font-bold text-rose-300 uppercase tracking-widest transition-colors flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <AlertTriangle className="w-3 h-3" /> QUARANTINE & OPEN CLAIM
+                        <AlertTriangle className="w-3.5 h-3.5" /> QUARANTINE & OPEN CLAIM
                       </button>
                     </div>
                   </div>

@@ -136,6 +136,23 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
+export async function downscaleFrameForVisionApi(
+  frameBase64: string | null | undefined
+): Promise<string | null | undefined> {
+  if (!frameBase64 || !frameBase64.startsWith('data:image')) return frameBase64;
+  try {
+    const cleanB64 = frameBase64.replace(/^data:image\/\w+;base64,/, '');
+    const buf = Buffer.from(cleanB64, 'base64');
+    const resized = await sharp(buf)
+      .resize({ width: 960, height: 960, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${resized.toString('base64')}`;
+  } catch {
+    return frameBase64;
+  }
+}
+
 export async function extractRealCropsFromFrame(
   frameBase64: string | null | undefined,
   masks: RawSamMask[],
