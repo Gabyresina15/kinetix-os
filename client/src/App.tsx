@@ -486,6 +486,13 @@ export default function App() {
         if (event === 'TOOL_FAILED') {
           const { tool, error, latencyMs } = data;
           enqueue(() => {
+            if (tool === 'generate_studio_catalog') {
+              setLatestCatalog((prev) =>
+                prev && !prev.studioImageUrl
+                  ? { ...prev, studioImageUrl: prev.sourceCropUrl || '', resolution: 'OPTICAL_CROP_FALLBACK' }
+                  : prev
+              );
+            }
             updateStep(tool, {
               status: 'FAILED',
               latencyMs,
@@ -820,6 +827,20 @@ export default function App() {
       setTriageNewCost('95');
     };
 
+    const hasBoxDirectlyAbove = masks.some((other) => {
+      if (other.id === m.id) return false;
+      const [ox, oy, ow, oh] = other.bbox;
+      const horizOverlap = Math.min(x + w, ox + ow) - Math.max(x, ox);
+      const otherBottom = oy + oh;
+      return (
+        oy + oh * 0.5 < y &&
+        horizOverlap > w * 0.35 &&
+        y - otherBottom >= -0.08 &&
+        y - otherBottom < 0.085
+      );
+    });
+    const placeLabelBelow = (hasBoxDirectlyAbove || y < 0.07) && y + h < 0.93;
+
     return (
       <div
         key={m.id}
@@ -838,7 +859,9 @@ export default function App() {
         <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-current" />
         <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-current" />
 
-        <div className="absolute -top-6 left-0 text-[10px] bg-slate-950/95 border border-slate-700/70 px-1.5 py-0.5 rounded text-slate-100 whitespace-nowrap font-medium tracking-wide shadow-lg">
+        <div
+          className={`absolute ${placeLabelBelow ? '-bottom-6' : '-top-6'} left-0 z-20 text-[10px] bg-slate-950/95 border border-slate-700/70 px-1.5 py-0.5 rounded text-slate-100 whitespace-nowrap font-medium tracking-wide shadow-lg`}
+        >
           {m.label || m.id}{' '}
           {isApproximate ? (
             <span className="text-amber-400 font-bold ml-1">[ APPROX ]</span>

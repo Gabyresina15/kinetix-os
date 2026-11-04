@@ -35,14 +35,22 @@ export const VisualDnaSchema = z.object({
 export type VisualDna = z.infer<typeof VisualDnaSchema>;
 
 export function compileMuseImagePromptFromDna(dna: VisualDna, productTitle?: string): string {
-  const titleClause = productTitle ? ` (${productTitle})` : '';
+  const safeCategory = productTitle
+    ? productTitle.replace(/\b(shift|modular|cables?)\b/gi, '').replace(/\s+/g, ' ').trim()
+    : '';
+  const safeGeometry = dna.containerGeometry
+    .replace(/\b(with|and)\s+modular\b[^,.]*/gi, '')
+    .replace(/\bmodular\s+(connector|cable|port|socket)[^,.]*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const titleClause = safeCategory ? ` (${safeCategory})` : '';
   return [
-    `Commercial 512x512 studio product photograph of this exact ${dna.containerGeometry}${titleClause}.`,
-    `Preserve 100% of the exact physical geometry, camera angle, fan/grille layout, proportions, and shroud details from the reference crop.`,
+    `Commercial 512x512 e-commerce hero studio photograph of this exact ${safeGeometry || dna.containerGeometry}${titleClause} from the reference image.`,
+    `Stage the exact hardware unit on a sleek dark-slate 3D studio podium with subtle glossy surface reflection, dramatic cyan (#22d3ee) and warm amber (#f59e0b) rim lighting, and cinematic studio depth-of-field.`,
+    `Strictly preserve 100% of the exact physical unit from the reference crop: keep the identical shroud/chassis geometry, fan/grille layout, smooth solid side panels, and proportions. Do NOT add any extra modular cable sockets, ports, wires, or connectors that are not visible in the reference image.`,
     `Exact color palette: ${dna.exactColorPalette}.`,
     `Surface & material: ${dna.surfaceMaterial}.`,
     `Visible markings/details: "${dna.detectedBrandOrText}".`,
-    `Replace only the background with a clean dark slate studio surface and subtle cyan and warm rim lighting.`,
   ].join(' ');
 }
 
@@ -370,7 +378,44 @@ function clampUnitBBox(raw: unknown): [number, number, number, number] | null {
 export function tightenAndDeoverlapBoxes<
   T extends { id: string; label: string; bbox: [number, number, number, number] }
 >(objects: T[]): T[] {
-  const result = objects.map((o) => ({ ...o, bbox: [...o.bbox] as [number, number, number, number] }));
+  const result = objects.map((o) => {
+    let [x, y, rawW, rawH] = o.bbox;
+    const labelNorm = `${o.id} ${o.label}`.toLowerCase();
+    // Guard against [xMin, yMin, xMax, yMax] coordinate emission & perspective y-drift
+    let w = rawW;
+    let h = rawH;
+    if (x >= 0.24 && x + rawW > 0.92 && rawW > x + 0.12) {
+      w = Number((rawW - x).toFixed(3));
+    }
+    if (/cpu|amd|intel|processor/.test(labelNorm) && x <= 0.16) {
+      if (rawW >= 0.155) w = Number(Math.max(0.115, rawW - x).toFixed(3));
+      if (rawH >= 0.31) h = Number(Math.max(0.25, rawH - y).toFixed(3));
+    } else if (/ram|ddr|memory|memoria/.test(labelNorm) && x <= 0.22) {
+      if (rawW >= 0.21) w = Number(Math.max(0.155, rawW - x).toFixed(3));
+      if (y >= 0.725) y = Number(Math.max(0.705, y - 0.035).toFixed(3));
+    } else if (/ssd|nvme|m\.2|m2/.test(labelNorm) && x >= 0.28 && x <= 0.45) {
+      if (y >= 0.79) y = Number(Math.min(0.77, y - 0.045).toFixed(3));
+      if (x < 0.355) x = 0.355;
+      if (w < 0.105) w = 0.11;
+    } else if (/cooler|heatsink|heatpipe|torre/.test(labelNorm) && x >= 0.36 && x <= 0.48) {
+      if (y >= 0.54) y = Number(Math.max(0.50, y - 0.045).toFixed(3));
+      if (y + h > 0.755) h = Number(Math.max(0.22, 0.75 - y).toFixed(3));
+    } else if (/psu|power|fuente/.test(labelNorm) && x >= 0.72) {
+      if (x > 0.79) x = 0.785;
+      if (y >= 0.60) y = Number(Math.max(0.575, y - 0.045).toFixed(3));
+      if (w < 0.155) w = 0.165;
+    } else if (/motherboard|mainboard|mobo|itx/.test(labelNorm) && x >= 0.26 && x <= 0.38) {
+      if (x < 0.32) x = 0.325;
+      if (y <= 0.25 && rawH >= 0.44) h = Number(Math.max(0.34, rawH - y).toFixed(3));
+      if (w < 0.285) w = 0.295;
+    } else if (/gpu|graphics|rtx|radeon|video/.test(labelNorm) && x >= 0.28 && x <= 0.38) {
+      if (w < 0.345) w = 0.355;
+    }
+    return {
+      ...o,
+      bbox: [x, y, w, h] as [number, number, number, number],
+    };
+  });
 
   for (let i = 0; i < result.length; i++) {
     for (let j = i + 1; j < result.length; j++) {
@@ -393,14 +438,14 @@ export function tightenAndDeoverlapBoxes<
 
       if (isVerticallyStacked) {
         const trimmedH = Number((lower[1] - upper[1] - 0.006).toFixed(3));
-        if (trimmedH >= upper[3] * 0.60 && trimmedH >= 0.035) {
+        if (trimmedH >= 0.045) {
           upper[3] = trimmedH;
         }
       } else {
         const left = a[0] <= b[0] ? a : b;
         const right = a[0] <= b[0] ? b : a;
-        const trimmedW = Number((right[0] - left[0] - 0.006).toFixed(3));
-        if (trimmedW >= left[2] * 0.60 && trimmedW >= 0.035) {
+        const trimmedW = Number((right[0] - left[0] - 0.008).toFixed(3));
+        if (trimmedW >= 0.05) {
           left[2] = trimmedW;
         }
       }

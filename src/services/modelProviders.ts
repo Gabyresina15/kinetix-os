@@ -298,7 +298,7 @@ export async function callBasetenMuseSparkOpen(
     },
     body: JSON.stringify({
       model,
-      temperature: 0.1,
+      temperature: 0,
       max_tokens: 2048,
       stream: true,
       ...(useBaseten ? { reasoning_effort: 'low' } : {}),
@@ -415,9 +415,25 @@ export async function callMuseImageStudioSynthesis(
   // Primary: 1:1 Image-to-Image Studio Synthesis via /images/edits using the real optical camera crop
   if (sourceCropBase64 && sourceCropBase64.startsWith('data:image')) {
     try {
+      let compactRefUri = sourceCropBase64;
+      try {
+        const sharpMod = (await import('sharp')).default;
+        const rawB64 = sourceCropBase64.replace(/^data:image\/\w+;base64,/, '');
+        const compactBuf = await sharpMod(Buffer.from(rawB64, 'base64'))
+          .resize({ width: 384, height: 384, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 84 })
+          .toBuffer();
+        compactRefUri = `data:image/jpeg;base64,${compactBuf.toString('base64')}`;
+      } catch {
+        compactRefUri = sourceCropBase64;
+      }
+
+      const editSignal = signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(18_500)])
+        : AbortSignal.timeout(18_500);
       const editResponse = await fetch(`${baseUrl}/images/edits`, {
         method: 'POST',
-        signal,
+        signal: editSignal,
         headers: {
           Authorization: `Bearer ${apiKey!.trim()}`,
           'Content-Type': 'application/json',
@@ -428,7 +444,7 @@ export async function callMuseImageStudioSynthesis(
           n: 1,
           size: requestedSize,
           response_format: 'b64_json',
-          images: [{ image_url: sourceCropBase64 }],
+          images: [{ image_url: compactRefUri }],
         }),
       });
       if (editResponse.ok) {
@@ -455,9 +471,12 @@ export async function callMuseImageStudioSynthesis(
   }
 
   const trySize = async (size: string) => {
+    const genSignal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(14_000)])
+      : AbortSignal.timeout(14_000);
     const response = await fetch(`${baseUrl}/images/generations`, {
       method: 'POST',
-      signal,
+      signal: genSignal,
       headers: {
         Authorization: `Bearer ${apiKey!.trim()}`,
         'Content-Type': 'application/json',
@@ -560,21 +579,21 @@ export function computeIoU(
 
 function boxesAreSameObject(
   original: [number, number, number, number],
-  refined: [number, number, number, number]
+  refined: [number, number, number, number],
+  label?: string
 ): boolean {
   const originalArea = Math.max(0, original[2]) * Math.max(0, original[3]);
   const refinedArea = Math.max(0, refined[2]) * Math.max(0, refined[3]);
   if (originalArea < 0.0002 || refinedArea < 0.0002) return false;
 
-  const search = inflateBox(original, 0.25);
+  const origCenterX = original[0] + original[2] / 2;
+  const origCenterY = original[1] + original[3] / 2;
   const centerX = refined[0] + refined[2] / 2;
   const centerY = refined[1] + refined[3] / 2;
 
-  const centerInside =
-    centerX >= search[0] &&
-    centerX <= search[0] + search[2] &&
-    centerY >= search[1] &&
-    centerY <= search[1] + search[3];
+  const centerAligned =
+    Math.abs(centerX - origCenterX) <= original[2] * 0.32 &&
+    Math.abs(centerY - origCenterY) <= original[3] * 0.35;
 
   const iou = computeIoU(original, refined);
   const areaRatio = refinedArea / originalArea;
@@ -586,22 +605,42 @@ function boxesAreSameObject(
   const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
   const containmentInOriginal = interArea / Math.max(0.0001, refinedArea);
 
+  const isMultiStickPair = /\b(pair|kit|2x|two|modules|sticks|ram)\b/i.test(label || '');
+  if (isMultiStickPair) {
+    return (
+      centerAligned &&
+      iou >= 0.50 &&
+      refined[3] >= original[3] * 0.72 &&
+      refined[2] <= original[2] * 1.15 &&
+      areaRatio >= 0.65 &&
+      areaRatio <= 1.35
+    );
+  }
+
   return (
-    centerInside &&
-    (iou >= 0.22 || containmentInOriginal >= 0.65) &&
-    areaRatio >= 0.22 &&
-    areaRatio <= 1.65
+    centerAligned &&
+    refined[2] >= original[2] * 0.52 &&
+    refined[3] >= original[3] * 0.45 &&
+    (iou >= 0.25 || containmentInOriginal >= 0.68) &&
+    areaRatio >= 0.32 &&
+    areaRatio <= 1.55
   );
+}
+
+interface ParsedSamBox {
+  promptId: number | null;
+  bbox: [number, number, number, number];
 }
 
 function parseSamBoxes(
   text: string,
   fallbackSize: { w: number; h: number }
-): Array<[number, number, number, number]> {
-  const found: Array<[number, number, number, number]> = [];
+): ParsedSamBox[] {
+  const found: ParsedSamBox[] = [];
   const re = /(?:(\d+)\s*)?<\|box;x1=([\d.]+);y1=([\d.]+);x2=([\d.]+);y2=([\d.]+)(?:;w=([\d.]+);h=([\d.]+))?\|?>/g;
 
   for (const match of text.matchAll(re)) {
+    const promptId = match[1] ? Number(match[1]) : null;
     const x1 = Number(match[2]);
     const y1 = Number(match[3]);
     const x2 = Number(match[4]);
@@ -614,12 +653,15 @@ function parseSamBoxes(
     const ny = Math.min(0.98, Math.max(0, y1 / h));
     const nw = Math.min(1 - nx, Math.max(0.02, (x2 - x1) / w));
     const nh = Math.min(1 - ny, Math.max(0.02, (y2 - y1) / h));
-    found.push([
-      Number(nx.toFixed(3)),
-      Number(ny.toFixed(3)),
-      Number(nw.toFixed(3)),
-      Number(nh.toFixed(3)),
-    ]);
+    found.push({
+      promptId,
+      bbox: [
+        Number(nx.toFixed(3)),
+        Number(ny.toFixed(3)),
+        Number(nw.toFixed(3)),
+        Number(nh.toFixed(3)),
+      ],
+    });
   }
   return found;
 }
@@ -657,27 +699,49 @@ export async function refineMasksWithSam31<T extends SamMask>(
 
   const endpoint = process.env.META_SAM_URL || `${normalizeMetaBaseUrl(process.env.META_API_BASE_URL)}/responses`;
   const model = process.env.META_SAM_MODEL || 'sam-3.1';
-  const prompt = `<0f>${actionable
-    .map((mask, index) => {
-      const boxArea = mask.bbox[2] * mask.bbox[3];
+  const maxW = size.w - 1;
+  const maxH = size.h - 1;
+  const toSamBoxTag = (idx: number, b: [number, number, number, number]) => {
+    const x1 = Math.max(0, Math.min(maxW - 2, Math.floor(b[0] * size.w)));
+    const y1 = Math.max(0, Math.min(maxH - 2, Math.floor(b[1] * size.h)));
+    const x2 = Math.max(x1 + 2, Math.min(maxW, Math.ceil((b[0] + b[2]) * size.w)));
+    const y2 = Math.max(y1 + 2, Math.min(maxH, Math.ceil((b[1] + b[3]) * size.h)));
+    return `${idx}<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${size.w};h=${size.h}|>`;
+  };
+
+  let nextPromptId = 1;
+  const promptTags: string[] = [];
+  const maskPromptIds = new Map<string, number[]>();
+
+  for (const mask of actionable) {
+    const [bx, by, bw, bh] = mask.bbox;
+    const isMultiStickPair = /\b(pair|kit|2x|two|modules|sticks|ram)\b/i.test(`${mask.id} ${mask.label}`);
+    if (isMultiStickPair && bh >= 0.09) {
+      const idTop = nextPromptId++;
+      const idBottom = nextPromptId++;
+      maskPromptIds.set(mask.id, [idTop, idBottom]);
+      const topY = Math.max(0, Number((by - bh * 0.18).toFixed(3)));
+      const topH = Number(((by + bh * 0.52) - topY).toFixed(3));
+      const botY = Number((by + bh * 0.38).toFixed(3));
+      const botH = Number((bh * 0.58).toFixed(3));
+      promptTags.push(toSamBoxTag(idTop, [bx, topY, bw, Math.max(0.04, topH)]));
+      promptTags.push(toSamBoxTag(idBottom, [bx, botY, bw, Math.max(0.04, botH)]));
+    } else {
+      const idSingle = nextPromptId++;
+      maskPromptIds.set(mask.id, [idSingle]);
+      const boxArea = bw * bh;
       const padX = boxArea < 0.008 ? 0.25 : 0.0;
       const padY = boxArea < 0.008 ? 0.12 : 0.0;
       const search: [number, number, number, number] = [
-        Math.max(0, mask.bbox[0] - mask.bbox[2] * padX),
-        Math.max(0, mask.bbox[1] - mask.bbox[3] * padY),
-        Math.min(1, mask.bbox[2] * (1 + padX * 2)),
-        Math.min(1, mask.bbox[3] * (1 + padY * 2)),
+        Math.max(0, bx - bw * padX),
+        Math.max(0, by - bh * padY),
+        Math.min(1, bw * (1 + padX * 2)),
+        Math.min(1, bh * (1 + padY * 2)),
       ];
-
-      const maxW = size.w - 1;
-      const maxH = size.h - 1;
-      const x1 = Math.max(0, Math.min(maxW - 2, Math.floor(search[0] * size.w)));
-      const y1 = Math.max(0, Math.min(maxH - 2, Math.floor(search[1] * size.h)));
-      const x2 = Math.max(x1 + 2, Math.min(maxW, Math.ceil((search[0] + search[2]) * size.w)));
-      const y2 = Math.max(y1 + 2, Math.min(maxH, Math.ceil((search[1] + search[3]) * size.h)));
-      return `${index + 1}<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${size.w};h=${size.h}|>`;
-    })
-    .join(',')}`;
+      promptTags.push(toSamBoxTag(idSingle, search));
+    }
+  }
+  const prompt = `<0f>${promptTags.join(',')}`;
 
   try {
     const response = await fetch(endpoint, {
@@ -715,7 +779,14 @@ export async function refineMasksWithSam31<T extends SamMask>(
       output.replace(/<\|mask;[^|]*\|>/g, '<|mask|>').slice(0, 500)
     );
 
-    const candidateBoxes = parseSamBoxes(output, size);
+    const parsedBoxes = parseSamBoxes(output, size);
+    const byPromptId = new Map<number, [number, number, number, number]>();
+    for (const item of parsedBoxes) {
+      if (item.promptId !== null && !byPromptId.has(item.promptId)) {
+        byPromptId.set(item.promptId, item.bbox);
+      }
+    }
+
     const usedCandidateIndices = new Set<number>();
     let refined = 0;
     let rejected = 0;
@@ -723,21 +794,57 @@ export async function refineMasksWithSam31<T extends SamMask>(
     const refinedMasks = masks.map((mask) => {
       if (mask.isSensitivePII) return mask;
 
+      const assignedIds = maskPromptIds.get(mask.id) || [];
+      if (assignedIds.length === 2) {
+        // Multi-stick pair: ONLY union the two prompt IDs dedicated to this mask
+        const stickBoxes = assignedIds
+          .map((pid) => byPromptId.get(pid))
+          .filter((b): b is [number, number, number, number] => {
+            if (!b) return false;
+            return b[2] <= mask.bbox[2] * 1.18 && b[1] + b[3] <= mask.bbox[1] + mask.bbox[3] + 0.03;
+          });
+        if (stickBoxes.length === 2) {
+          const minX = Math.min(stickBoxes[0][0], stickBoxes[1][0]);
+          const minY = Math.min(stickBoxes[0][1], stickBoxes[1][1]);
+          const maxX = Math.max(stickBoxes[0][0] + stickBoxes[0][2], stickBoxes[1][0] + stickBoxes[1][2]);
+          const maxY = Math.max(stickBoxes[0][1] + stickBoxes[0][3], stickBoxes[1][1] + stickBoxes[1][3]);
+          const unionBox: [number, number, number, number] = [
+            Number(minX.toFixed(3)),
+            Number(minY.toFixed(3)),
+            Number((maxX - minX).toFixed(3)),
+            Number((maxY - minY).toFixed(3)),
+          ];
+          if (boxesAreSameObject(mask.bbox, unionBox, `${mask.id} ${mask.label}`)) {
+            refined += 1;
+            return { ...mask, bbox: unionBox };
+          }
+        }
+      }
+
+      // Single object: check direct promptId match first, then fallback to best IoU
+      const directCandidate = assignedIds.length === 1 ? byPromptId.get(assignedIds[0]) ?? null : null;
+      if (directCandidate && boxesAreSameObject(mask.bbox, directCandidate, `${mask.id} ${mask.label}`)) {
+        const idx = parsedBoxes.findIndex((p) => p.promptId === assignedIds[0]);
+        if (idx !== -1) usedCandidateIndices.add(idx);
+        refined += 1;
+        return { ...mask, bbox: directCandidate };
+      }
+
       let bestIdx = -1;
       let bestIoU = -1;
 
-      for (let i = 0; i < candidateBoxes.length; i++) {
+      for (let i = 0; i < parsedBoxes.length; i++) {
         if (usedCandidateIndices.has(i)) continue;
-        const iou = computeIoU(mask.bbox, candidateBoxes[i]);
+        const iou = computeIoU(mask.bbox, parsedBoxes[i].bbox);
         if (iou > bestIoU) {
           bestIoU = iou;
           bestIdx = i;
         }
       }
 
-      const candidate = bestIdx !== -1 ? candidateBoxes[bestIdx] : null;
-      if (!candidate || !boxesAreSameObject(mask.bbox, candidate)) {
-        if (candidate) rejected += 1;
+      const candidate = bestIdx !== -1 ? parsedBoxes[bestIdx].bbox : null;
+      if (!candidate || !boxesAreSameObject(mask.bbox, candidate, `${mask.id} ${mask.label}`)) {
+        if (directCandidate || candidate) rejected += 1;
         return mask;
       }
 
@@ -747,7 +854,7 @@ export async function refineMasksWithSam31<T extends SamMask>(
     });
 
     console.log(
-      `[SAM 3.1 IoU] parsed=${candidateBoxes.length}, kept=${refined}/${actionable.length}, rejected=${rejected}`
+      `[SAM 3.1 IoU] parsed=${parsedBoxes.length}, kept=${refined}/${actionable.length}, rejected=${rejected}`
     );
     return { masks: refinedMasks, used: refined > 0, latencyMs: Date.now() - started, refined };
   } catch (err) {

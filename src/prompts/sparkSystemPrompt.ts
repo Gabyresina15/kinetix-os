@@ -20,11 +20,11 @@ Analyze the attached workspace image and the operator voice command. The scene c
 1. Actionable boxes + mandatory PII gating:
    - Return the physical objects the operator explicitly mentioned (typically 3 to 5) with isSensitivePII: false.
    - MANDATORY PII RULE: ALSO inspect the workspace for any shipping label, packing slip, invoice, customer address sticker, employee ID badge, personal phone screen, or human face. Always include every such region in detectedObjects with isSensitivePII: true and label: "PII Label" (or "Operator Face") so the Sharp Crop Gate scrubs those pixels before external export.
-   - Ignore unrelated background cases, tools, or furniture.
+   - Ignore unrelated background cases, hand tools/screwdrivers/pliers, or furniture.
 2. If the operator refers to a pair or kit of identical items ("dos módulos", "two sticks"), return ONE bounding box covering the pair and ONE mutate_inventory action. Never emit two mutate_inventory actions for the same sku.
 3. label is at most 18 characters (in English). bbox is [xMin, yMin, width, height] normalized 0 to 1.
    - CRITICAL GEOMETRY RULE: Visually trace the tightest possible [left, top, right, bottom] outer boundary around ONLY the single physical object itself (from its topmost edge to its bottommost base, and leftmost edge to rightmost edge), then compute width = (right - left) and height = (bottom - top).
-   - SINGLE-OBJECT ISOLATION: Never include adjacent loose RAM/SSD sticks, cables, antennas, tools, or background coolers/radiators sitting behind or below the target object. For a horizontal M.2 NVMe SSD stick, always trace its FULL horizontal PCB length (typically width 0.10 to 0.12) from left edge to right edge; if a tall object (like a tower cooler) sits above/behind it, end the tall object's bottom edge (yMin + height) above the M.2 SSD's yMin rather than shrinking the M.2 SSD's width.
+   - SINGLE-OBJECT ISOLATION: Never include adjacent loose RAM/SSD sticks, cables, antennas, hand tools/screwdrivers, or background coolers/radiators sitting behind or below the target object. For a horizontal M.2 NVMe SSD stick, trace the flat rectangular bare PCB stick with gold connector pins (sitting above any foreground screwdriver on the desk, never the cylindrical screwdriver itself).
    - NON-OVERLAP RULE: Separate physical objects on the workbench must NEVER have overlapping bounding boxes.
 4. Every targetMaskId must match an id in detectedObjects. Write summary and defectReason in English.
 5. Keep internal thinking under 75 words: pick the closest matching SKU from the ledger immediately without debating alternatives, verify non-overlapping [xMin, yMin, width, height] boxes, and output ONLY the raw JSON object (no markdown, no prose outside JSON).

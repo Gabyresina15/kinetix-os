@@ -301,7 +301,7 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   quarantine_and_claim: 12_000,
   mutate_inventory: 10_000,
   recalculate_margins_vm: 14_000,
-  generate_studio_catalog: 30_000,
+  generate_studio_catalog: 45_000,
 };
 
 // Stage 1 runs independent spatial & inventory mutations in parallel;
@@ -379,7 +379,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const emitEarlyObjects = (objects: DetectedObjectDraft[]) => {
       if (spatialLocked || !objects.length) return;
       spatialLocked = true;
-      lockedRawMasks = draftsToRawMasks(objects);
+      lockedRawMasks = tightenAndDeoverlapBoxes(draftsToRawMasks(objects));
       const earlyNormalized = normalizeSpatialScene(lockedRawMasks);
       const earlyElapsed = Date.now() - startedAt;
       sendEvent('SPATIAL_LOCK', {
@@ -596,7 +596,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
         .filter((id): id is string => Boolean(id))
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
-    const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
+    const finalMasks = tightenAndDeoverlapBoxes(
+      cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4)
+    );
 
     // Ensure t=0ms Muse Wonder has settled before calling SAM 3.1 so Meta API never queues concurrent requests
     if (mode === 'LIVE' && hasMetaKey) {
