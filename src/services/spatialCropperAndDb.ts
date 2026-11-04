@@ -20,6 +20,7 @@ export function resolveMongoDbName(uri: string): string {
 }
 
 export async function getPersistenceDb(): Promise<any> {
+  if (process.env.KINETIX_TEST_MODE === '1') return null;
   if (persistenceDb) {
     try {
       await persistenceDb.command({ ping: 1 });
@@ -35,10 +36,11 @@ export async function getPersistenceDb(): Promise<any> {
     }
   }
   if (Date.now() < mongoUnavailableUntil) return null;
+  let client: any = null;
   try {
     const { MongoClient } = await import('mongodb');
     const uri = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/kinetix_erp';
-    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
+    client = new MongoClient(uri, { serverSelectionTimeoutMS: 1500 });
     await client.connect();
     const dbName = resolveMongoDbName(uri);
     mongoClient = client;
@@ -46,6 +48,11 @@ export async function getPersistenceDb(): Promise<any> {
     console.log(`[MongoDB] Connected to ${dbName}`);
     return persistenceDb;
   } catch (err) {
+    try {
+      await client?.close();
+    } catch {
+      // ignore close errors
+    }
     console.warn(`[MongoDB] Connection unavailable, using local ledger fallback: ${(err as Error).message}`);
     mongoUnavailableUntil = Date.now() + 30_000;
     return null;
@@ -224,14 +231,7 @@ export async function buildForensicTelegramEvidenceBase64(claim: {
   bbox?: [number, number, number, number];
   cropBase64?: string;
 }): Promise<string | undefined> {
-  if (!claim.cropBase64 || !claim.cropBase64.startsWith('data:image')) {
-    return claim.cropBase64;
-  }
-
   try {
-    const cleanCropB64 = claim.cropBase64.replace(/^data:image\/\w+;base64,/, '');
-    const rawCropBuf = Buffer.from(cleanCropB64, 'base64');
-
     let sceneBuf = lastSanitizedFrameBuffer;
     if (!sceneBuf) {
       try {
@@ -241,6 +241,27 @@ export async function buildForensicTelegramEvidenceBase64(claim: {
       }
     }
 
+    const bbox = claim.bbox || [0.39, 0.44, 0.16, 0.36];
+    let rawCropBuf: Buffer | null = null;
+
+    if (claim.cropBase64 && claim.cropBase64.startsWith('data:image')) {
+      const cleanCropB64 = claim.cropBase64.replace(/^data:image\/\w+;base64,/, '');
+      rawCropBuf = Buffer.from(cleanCropB64, 'base64');
+    } else if (sceneBuf) {
+      const meta = await sharp(sceneBuf).metadata();
+      const imgW = meta.width || 1280;
+      const imgH = meta.height || 720;
+      const left = Math.max(0, Math.floor(bbox[0] * imgW));
+      const top = Math.max(0, Math.floor(bbox[1] * imgH));
+      const width = Math.max(16, Math.min(imgW - left, Math.floor(bbox[2] * imgW)));
+      const height = Math.max(16, Math.min(imgH - top, Math.floor(bbox[3] * imgH)));
+      rawCropBuf = await sharp(sceneBuf).extract({ left, top, width, height }).toBuffer();
+    }
+
+    if (!rawCropBuf) {
+      return claim.cropBase64;
+    }
+
     const plateW = 1280;
     const plateH = 720;
     const leftW = 740;
@@ -248,7 +269,6 @@ export async function buildForensicTelegramEvidenceBase64(claim: {
     const leftX = 28;
     const leftY = 124;
 
-    const bbox = claim.bbox || [0.39, 0.44, 0.16, 0.36];
     const bx = Math.round(bbox[0] * leftW);
     const by = Math.round(bbox[1] * leftH);
     const bw = Math.max(24, Math.round(bbox[2] * leftW));

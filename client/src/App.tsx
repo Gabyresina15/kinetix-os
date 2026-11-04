@@ -169,6 +169,10 @@ export default function App() {
     }
   }, []);
 
+  const updateStep = useCallback((id: string, patch: Partial<ExecutionStep>) => {
+    setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }, []);
+
   const handleUndoTx = useCallback(async (txId: string) => {
     setUndoingTxId(txId);
     try {
@@ -179,9 +183,50 @@ export default function App() {
       });
       const data = await res.json();
       if (data.ok) {
-        if (Array.isArray(data.inventory)) setInventory(data.inventory);
+        const rolledBackUndo = data.rolledBackBlock?.undo as
+          | {
+              kind: string;
+              sku?: string;
+              ticketId?: string;
+              swappedFrom?: { sku: string; previousStock: number };
+            }
+          | undefined;
+        if (Array.isArray(data.inventory)) {
+          setInventory((prev) => {
+            const prevBadges = new Map(
+              prev.map((it) => [it.sku, { _highlightDelta: it._highlightDelta, _repriced: it._repriced }])
+            );
+            if (rolledBackUndo?.kind === 'RESTORE_STOCK' && rolledBackUndo.sku) {
+              prevBadges.set(rolledBackUndo.sku, {
+                _highlightDelta: 'UNDO',
+                _repriced: prevBadges.get(rolledBackUndo.sku)?._repriced,
+              });
+              if (rolledBackUndo.swappedFrom?.sku) {
+                prevBadges.set(rolledBackUndo.swappedFrom.sku, {
+                  _highlightDelta: 'RESTORED',
+                  _repriced: prevBadges.get(rolledBackUndo.swappedFrom.sku)?._repriced,
+                });
+              }
+            } else if (rolledBackUndo?.kind === 'RESTORE_PRICE' && rolledBackUndo.sku) {
+              prevBadges.set(rolledBackUndo.sku, {
+                _highlightDelta: prevBadges.get(rolledBackUndo.sku)?._highlightDelta,
+                _repriced: false,
+              });
+            }
+            return data.inventory.map((it: InventoryItem) => {
+              const kept = prevBadges.get(it.sku);
+              return kept ? { ...it, ...kept } : it;
+            });
+          });
+        }
         if (Array.isArray(data.claims)) {
           setLatestClaim(data.claims.length > 0 ? data.claims[0] : null);
+          if (rolledBackUndo?.kind === 'REVOKE_CLAIM' && data.claims.length === 0) {
+            updateStep('quarantine_and_claim', {
+              status: 'MUTATED',
+              detail: `Claim #${rolledBackUndo.ticketId || ''} revoked via SHA-256 compensating transaction`,
+            });
+          }
         }
         if (Array.isArray(data.blocks)) setAuditBlocks(data.blocks);
         if (data.integrity) setAuditIntegrity(data.integrity);
@@ -192,7 +237,7 @@ export default function App() {
     } finally {
       setUndoingTxId(null);
     }
-  }, [speakTactical]);
+  }, [speakTactical, updateStep]);
 
   const fetchLiveLedger = useCallback(async () => {
     try {
@@ -236,10 +281,6 @@ export default function App() {
     const scale = Math.min(stageSize.w / sourceDims.w, stageSize.h / sourceDims.h);
     return { w: sourceDims.w * scale, h: sourceDims.h * scale };
   })();
-
-  const updateStep = useCallback((id: string, patch: Partial<ExecutionStep>) => {
-    setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-  }, []);
 
   const getMaskStatusForTool = (tool: string): MaskStatus => {
     switch (tool) {
@@ -997,26 +1038,36 @@ export default function App() {
                 const catalogItems = inventory.filter(
                   (it) => it.sku !== 'LOADING' && !it.sku.startsWith('SKU-TRIAGE-')
                 );
-                const needleText = `${rawLabel} ${selectedMaskId}`.toLowerCase();
-                const isRamMask = /ram|ddr|memoria|dimm|2x16|2x32|kit/.test(needleText);
-                const isSsdMask = /ssd|nvme|m\.2|pcie|gen4|gen5|sata/.test(needleText);
-                const isCoolerMask = /cooler|torre|heatsink|aio|fan|ventil|aleta/.test(needleText);
-                const isPsuMask = /psu|fuente|power|rm1000|atx|modular|watt/.test(needleText);
-                const isGpuMask = /gpu|rtx|radeon|rx|placa/.test(needleText);
-                const isCpuMask = /cpu|ryzen|intel|core/.test(needleText);
+                const existingCatalogByLabel = catalogItems.find((it) => it.sku === rawLabel.toUpperCase());
+                const needleText = `${rawLabel} ${selectedMaskId} ${existingCatalogByLabel?.name || ''}`.toLowerCase();
+                const isGpuMask = /gpu|graphics|geforce|rtx|radeon|rx\s?\d|dual-fan|vga|placa/.test(needleText);
+                const isMoboMask =
+                  /motherboard|mainboard|mobo|mini-itx|itx|atx|b650|b760|z790|x670|sku-mb-/.test(needleText) &&
+                  !/psu|power|rm1000/.test(needleText);
+                const isRamMask = /ram|ddr|memoria|dimm|2x16|2x32|kit|vengeance|fury|ripjaws/.test(needleText);
+                const isSsdMask = /ssd|nvme|m\.2|pcie|gen4|gen5|sata/.test(needleText) && !isMoboMask;
+                const isCoolerMask =
+                  /cooler|torre|heatsink|heatpipe|aio|fan|ventil|aleta|sku-air-|sku-aio-/.test(needleText) &&
+                  !isGpuMask;
+                const isPsuMask = /psu|fuente|power|rm1000|modular|watt|sku-psu-/.test(needleText);
+                const isCpuMask =
+                  /cpu|processor|ryzen|amd|intel|core\s?i[579]|sku-amd-|sku-intel-/.test(needleText) &&
+                  !isGpuMask &&
+                  !isMoboMask;
 
                 const scoredCatalog = catalogItems
                   .map((item) => {
                     const hay = `${item.sku} ${item.name}`.toLowerCase();
                     let score = 0;
-                    if (isRamMask && /ddr|ram|fury|vengeance|trident/.test(hay)) score += 50;
-                    if (isSsdMask && /nvme|ssd|m\.2|sata/.test(hay)) score += 50;
-                    if (isCoolerMask && /cooler|tower|aio|liquid|fan/.test(hay)) score += 50;
-                    if (isPsuMask && /psu|modular|gold|platinum|atx3|watt|1000w|850w/.test(hay)) score += 50;
-                    if (isGpuMask && /rtx|rx|gpu|geforce|radeon/.test(hay)) score += 50;
-                    if (isCpuMask && /ryzen|intel|core/.test(hay)) score += 50;
-                    for (const tok of needleText.split(/[^a-z0-9]+/).filter((w) => w.length >= 2)) {
-                      if (hay.includes(tok)) score += 15;
+                    if (isRamMask && /ddr|ram|fury|vengeance|trident|ripjaws|ballistix/.test(hay)) score += 60;
+                    if (isSsdMask && /nvme|ssd|m\.2|sata/.test(hay)) score += 60;
+                    if (isCoolerMask && /cooler|tower|aio|liquid|noctua|kraken/.test(hay)) score += 60;
+                    if (isPsuMask && /psu|modular|gold|platinum|atx|watt|1000w|850w|650w/.test(hay)) score += 60;
+                    if (isGpuMask && /rtx|rx|gpu|geforce|radeon/.test(hay)) score += 60;
+                    if (isMoboMask && /sku-mb-|z790|b760|x670|b650|tomahawk|maximus|aorus|riptide/.test(hay)) score += 60;
+                    if (isCpuMask && /ryzen|intel|core/.test(hay)) score += 60;
+                    for (const tok of needleText.split(/[^a-z0-9]+/).filter((w) => w.length >= 2 && w !== 'sku')) {
+                      if (hay.includes(tok)) score += 12;
                     }
                     return { item, score };
                   })

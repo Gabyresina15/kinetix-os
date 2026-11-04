@@ -23,6 +23,7 @@ import { normalizeSpatialScene } from '../services/spatialNormalizer';
 import {
   resolveMongoDbName,
   extractRealCropsFromFrame,
+  buildForensicTelegramEvidenceBase64,
 } from '../services/spatialCropperAndDb';
 import {
   resetAuditLedger,
@@ -403,8 +404,79 @@ test('Fastify REPLAY orchestration stream, stage-based concurrent DAG, dynamic $
     LIVE_STORE_STATE.inventory.some((i) => i.sku === 'SKU-TRIAGE-PENDING'),
     'Ambiguous item must be routed to SKU-TRIAGE-PENDING for 1-click supervisor triage'
   );
+});
 
-  // Real TCP HTTP socket regression test (Node 23 IncomingMessage 'close' on 85KB POST body must NOT abort SSE!)
+test('Bench #2 intake, supervisor override stock swap + dual-SKU compensating undo, 1280x720 Full-HD forensic Telegram plate, and TCP SSE socket work end-to-end', async () => {
+  await app.inject({ method: 'POST', url: '/api/reset-demo' });
+
+  // 1) Run Bench #2 orchestration stream (GPU + Mini-ITX Motherboard + AMD Processor)
+  const bench2Res = await app.inject({
+    method: 'POST',
+    url: '/api/orchestrate-stream',
+    payload: {
+      voiceTranscript:
+        'Add the dual-fan graphics card, the Mini-ITX motherboard, and the AMD processor box on the workbench to stock, generate a 512x512 studio catalog photo for the graphics card, and recalculate prices at 30% margin.',
+    },
+  });
+  assert.equal(bench2Res.statusCode, 200);
+  const gpuBeforeSwap = LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-GPU-RTX4070')!;
+  const mobo = LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-MB-B760')!;
+  const cpu = LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-AMD-RYZEN-7')!;
+  assert.equal(gpuBeforeSwap.stock, 49); // 48 + 1
+  assert.equal(mobo.stock, 35); // 34 + 1
+  assert.equal(cpu.stock, 33); // 32 + 1
+
+  // 2) Supervisor overrides mask_gpu_card from SKU-GPU-RTX4070 -> SKU-GPU-RTX4080
+  const swapRes = await app.inject({
+    method: 'POST',
+    url: '/api/triage/resolve',
+    payload: {
+      action: 'STOCK',
+      maskId: 'mask_gpu_card',
+      sku: 'SKU-GPU-RTX4080',
+      name: 'NVIDIA GeForce RTX 4080 16GB',
+      delta: 1,
+    },
+  });
+  assert.equal(swapRes.statusCode, 200);
+  const swapJson = swapRes.json();
+  assert.equal(swapJson.swappedFromSku, 'SKU-GPU-RTX4070');
+  assert.equal(LIVE_STORE_STATE.inventory[0].sku, 'SKU-GPU-RTX4080', 'Swapped SKU must be promoted to Row #1');
+  assert.equal(LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-GPU-RTX4070')?.stock, 48, 'Previous SKU stock must revert to 48');
+  assert.equal(LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-GPU-RTX4080')?.stock, 16, 'New SKU stock must increment to 16');
+
+  // 3) Undo the supervisor swap and verify BOTH SKUs return to their pre-swap stock (49 and 15)
+  const ledgerRes = await app.inject({ method: 'GET', url: '/api/audit-ledger' });
+  const swapBlock = ledgerRes.json().blocks.find((b: any) => b.type === 'SUPERVISOR_TRIAGE' && b.skuOrRef === 'SKU-GPU-RTX4080');
+  assert.ok(swapBlock, 'Must record SUPERVISOR_TRIAGE block for SKU-GPU-RTX4080');
+
+  const undoSwapRes = await app.inject({
+    method: 'POST',
+    url: '/api/audit-ledger/undo',
+    payload: { txId: swapBlock.txId },
+  });
+  assert.equal(undoSwapRes.statusCode, 200);
+  assert.equal(LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-GPU-RTX4080')?.stock, 15, 'Target SKU must roll back to 15');
+  assert.equal(LIVE_STORE_STATE.inventory.find((i) => i.sku === 'SKU-GPU-RTX4070')?.stock, 49, 'Swapped-from SKU must restore to 49');
+
+  // 4) Verify 1280x720 Full-HD Forensic Telegram Evidence Plate
+  const plateDataUri = await buildForensicTelegramEvidenceBase64({
+    id: 'CLM-999',
+    objectLabel: 'Tower Cooler',
+    reason: 'crushed heatsink fin on copper-heatpipe tower cooler',
+    amountUsd: 66.3,
+    baseCostUsd: 78,
+    damageFactor: 0.85,
+    defectSeverity: 'CRITICAL',
+    bbox: [0.43, 0.5, 0.14, 0.26],
+  });
+  assert.ok(plateDataUri && plateDataUri.startsWith('data:image/jpeg;base64,'));
+  const plateBuffer = Buffer.from(plateDataUri.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+  const plateMeta = await sharp(plateBuffer).metadata();
+  assert.equal(plateMeta.width, 1280);
+  assert.equal(plateMeta.height, 720);
+
+  // 5) Real TCP HTTP socket regression test (Node 23 IncomingMessage 'close' on 85KB POST body must NOT abort SSE!)
   const address = await app.listen({ port: 0, host: '127.0.0.1' });
   try {
     const fake85KbPayload = 'data:image/jpeg;base64,' + 'A'.repeat(85_000);

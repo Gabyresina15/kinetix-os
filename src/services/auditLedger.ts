@@ -13,7 +13,12 @@ export type AuditTxType =
   | 'COMPENSATING_UNDO';
 
 export type UndoDescriptor =
-  | { kind: 'RESTORE_STOCK'; sku: string; previousStock: number }
+  | {
+      kind: 'RESTORE_STOCK';
+      sku: string;
+      previousStock: number;
+      swappedFrom?: { sku: string; previousStock: number };
+    }
   | { kind: 'RESTORE_PRICE'; sku: string; previousPriceUsd: number }
   | { kind: 'REVOKE_CLAIM'; ticketId: string }
   | { kind: 'NONE' };

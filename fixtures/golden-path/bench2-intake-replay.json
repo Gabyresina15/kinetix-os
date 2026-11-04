@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-11-04T00:18:00.000Z",
+  "scenario": "BENCH_2_GPU_MOBO_CPU_BATCH_INTAKE",
+  "liveSpark": {
+    "plan": {
+      "summary": "Added Dual-Fan GPU (SKU-GPU-RTX4070), Mini-ITX Motherboard (SKU-MB-B760), and AMD Processor Box (SKU-AMD-RYZEN-7) to stock, generated 512x512 studio catalog photo for the GPU, and recalculated prices at 30% margin.",
+      "detectedObjects": [
+        {
+          "id": "mask_gpu_card",
+          "label": "Dual-Fan GPU",
+          "bbox": [0.325, 0.53, 0.31, 0.225],
+          "confidence": 0.98,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_itx_mobo",
+          "label": "Mini-ITX Mobo",
+          "bbox": [0.335, 0.185, 0.215, 0.315],
+          "confidence": 0.96,
+          "isSensitivePII": false
+        },
+        {
+          "id": "mask_amd_cpu",
+          "label": "AMD Processor",
+          "bbox": [0.112, 0.165, 0.118, 0.252],
+          "confidence": 0.97,
+          "isSensitivePII": false
+        }
+      ],
+      "requiresHumanConfirmation": false,
+      "actions": [
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_gpu_card",
+          "sku": "SKU-GPU-RTX4070",
+          "itemName": "NVIDIA GeForce RTX 4070 12GB",
+          "delta": 1,
+          "unitCostUsd": 480
+        },
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_itx_mobo",
+          "sku": "SKU-MB-B760",
+          "itemName": "MSI MAG B760 Tomahawk WiFi",
+          "delta": 1,
+          "unitCostUsd": 140
+        },
+        {
+          "tool": "mutate_inventory",
+          "targetMaskId": "mask_amd_cpu",
+          "sku": "SKU-AMD-RYZEN-7",
+          "itemName": "AMD Ryzen 7 7800X3D",
+          "delta": 1,
+          "unitCostUsd": 310
+        },
+        {
+          "tool": "generate_studio_catalog",
+          "targetMaskId": "mask_gpu_card",
+          "productTitle": "NVIDIA GeForce RTX 4070 12GB Dual-Fan Edition",
+          "visualDna": {
+            "containerGeometry": "dual-fan open-shroud PCIe graphics card with exposed heatsink",
+            "exactColorPalette": "matte black shroud with dark gunmetal fan blades and metallic silver backplate accents",
+            "detectedBrandOrText": "no legible text",
+            "surfaceMaterial": "anodized aluminum heatsink and matte polycarbonate shroud"
+          }
+        },
+        {
+          "tool": "recalculate_margins_vm",
+          "targetMarginPercent": 30,
+          "taxRatePercent": 21
+        }
+      ]
+    },
+    "reasoningTrace": "Grounded 3 hardware assets on Bench #2: mask_gpu_card (SKU-GPU-RTX4070), mask_itx_mobo (SKU-MB-B760), and mask_amd_cpu (SKU-AMD-RYZEN-7). Zero structural defects reported. Executing Stage 1 inventory intake (+1 GPU, +1 motherboard, +1 AMD CPU) and 512x512 studio synthesis for the dual-fan graphics card, followed by Stage 2 30% margin + 21% tax repricing.",
+    "modelUsed": "meta-models/muse-spark-open-1026 (Baseten 2M TPM)",
+    "firstTokenLatencyMs": 1080,
+    "latencyMs": 8920
+  }
+}

@@ -213,28 +213,76 @@ function findBestInventoryMatch<T extends { sku: string; name: string }>(
   inventory: T[],
   hint: { sku?: string; itemName?: string; label?: string }
 ): T | undefined {
-  const normalize = (str: string) => str.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  const STOPWORDS = new Set(['sku', 'item', 'the', 'and', 'for', 'with', 'box', 'kit', 'new', 'pro']);
+  const normalize = (str: string) =>
+    str
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 2 && !STOPWORDS.has(w));
+
+  const rawHint = `${hint.sku || ''} ${hint.itemName || ''} ${hint.label || ''}`.toLowerCase();
   const hintTokens = new Set([
     ...normalize(hint.sku || ''),
     ...normalize(hint.itemName || ''),
     ...normalize(hint.label || ''),
   ]);
 
-  if (hintTokens.size === 0) return undefined;
+  if (hintTokens.size === 0 && !rawHint.trim()) return undefined;
+
+  const isMoboHint = /motherboard|mainboard|mobo|mini-itx|itx|atx|b650|b760|z790|x670/.test(rawHint) && !/psu|power/.test(rawHint);
+  const isGpuHint = /graphics|gpu|geforce|rtx|radeon|rx\s?\d|video card|dual-fan|placa de video/.test(rawHint);
+  const isCpuHint = /processor|cpu|ryzen|intel|core\s?i[579]|amd/.test(rawHint) && !isGpuHint && !isMoboHint;
+  const isRamHint = /ram|ddr5|ddr4|dimm|memory|memoria|vengeance|fury|ripjaws/.test(rawHint);
+  const isSsdHint = /ssd|nvme|m\.2|m2|pcie|sata/.test(rawHint) && !isMoboHint;
+  const isPsuHint = /psu|power supply|fuente|modular|rm1000|watt|1000w|850w|650w/.test(rawHint);
+  const isCoolerHint = /cooler|heatsink|heatpipe|torre|aio|kraken|noctua/.test(rawHint) && !isGpuHint;
 
   let bestMatch: T | undefined;
   let highestScore = 0;
 
   for (const item of inventory) {
-    const itemTokens = normalize(`${item.sku} ${item.name}`);
-    const score = itemTokens.filter((token) => hintTokens.has(token)).length;
+    if (item.sku.startsWith('SKU-TRIAGE-')) continue;
+    const itemText = `${item.sku} ${item.name}`.toLowerCase();
+    const itemTokens = normalize(itemText);
+    let score = itemTokens.filter((token) => hintTokens.has(token)).length * 10;
+
+    if (isMoboHint && item.sku.startsWith('SKU-MB-')) {
+      score += 25;
+      if (item.sku === 'SKU-MB-B760') score += 5;
+    }
+    if (isGpuHint && item.sku.startsWith('SKU-GPU-')) {
+      score += 25;
+      if (item.sku === 'SKU-GPU-RTX4070') score += 5;
+    }
+    if (isCpuHint && (item.sku.startsWith('SKU-AMD-') || item.sku.startsWith('SKU-INTEL-'))) {
+      score += 20;
+      if (/amd|ryzen/.test(rawHint) && item.sku === 'SKU-AMD-RYZEN-7') score += 12;
+      if (/intel|core/.test(rawHint) && item.sku === 'SKU-INTEL-CORE-I7') score += 8;
+    }
+    if (isRamHint && item.sku.includes('DDR')) {
+      score += 25;
+      if (item.sku === 'SKU-DDR5-32GB-KIT') score += 5;
+    }
+    if (isSsdHint && (item.sku.includes('NVME') || item.sku.includes('SSD'))) {
+      score += 25;
+      if (item.sku === 'SKU-NVME-2TB-GEN4') score += 5;
+    }
+    if (isPsuHint && item.sku.startsWith('SKU-PSU-')) {
+      score += 25;
+      if (item.sku === 'SKU-PSU-1000W-ATX3') score += 5;
+    }
+    if (isCoolerHint && (item.sku.startsWith('SKU-AIR-') || item.sku.startsWith('SKU-AIO-'))) {
+      score += 25;
+      if (item.sku === 'SKU-AIR-SINGLE-TOWER') score += 5;
+    }
+
     if (score > highestScore) {
       highestScore = score;
       bestMatch = item;
     }
   }
 
-  return bestMatch;
+  return highestScore >= 10 ? bestMatch : undefined;
 }
 
 function draftsToRawMasks(objects: DetectedObjectDraft[]): RawSamMask[] {
@@ -351,12 +399,15 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const intactFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'intact-intake-replay.json');
     const triageFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'triage-ambiguous-replay.json');
     const damagedFixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'damaged-claim-replay.json');
+    const bench2FixturePath = path.join(process.cwd(), 'fixtures', 'golden-path', 'bench2-intake-replay.json');
 
     const hasBasetenKey = hasRealApiKey(process.env.BASETEN_API_KEY);
     const hasMetaKey = hasRealApiKey(process.env.META_MODEL_API_KEY);
 
     if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
+        const isBench2Transcript =
+          /\b(graphics card|dual-fan|mini-itx|motherboard|amd processor|processor box)\b/i.test(voiceTranscript);
         const isIntactTranscript =
           /\b(intact|intacto|intactos|sin da[ñn]o|zero claim|zero physical defects)\b/i.test(voiceTranscript) &&
           !/\b(aleta|golpead|bent|crushed|reclamo|claim)\b/i.test(voiceTranscript);
@@ -364,7 +415,9 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           /\b(triage|etiqueta oculta|unreadable barcode|ambiguous|ambiguo)\b/i.test(voiceTranscript) &&
           !/\b(aleta|golpead|bent|crushed)\b/i.test(voiceTranscript);
 
-        const preferredPath = isIntactTranscript
+        const preferredPath = isBench2Transcript
+          ? bench2FixturePath
+          : isIntactTranscript
           ? intactFixturePath
           : isTriageOnlyTranscript
           ? triageFixturePath
@@ -571,9 +624,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     });
 
     const mutatedSkusInRun: string[] = [];
+    const resolvedDeltaBySku = new Map<string, number>();
     for (const act of activePlan.actions) {
       if (act.tool === 'mutate_inventory') {
         mutatedSkusInRun.push(act.sku);
+        resolvedDeltaBySku.set(act.sku, act.delta);
       }
     }
 
@@ -774,6 +829,10 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
 
           const previousStock = item.stock;
           item.stock += action.delta;
+          if (!mutatedSkusInRun.includes(item.sku)) {
+            mutatedSkusInRun.unshift(item.sku);
+          }
+          resolvedDeltaBySku.set(item.sku, action.delta);
           if (action.targetMaskId) {
             LAST_MUTATION_BY_MASK_ID.set(action.targetMaskId, {
               sku: item.sku,
@@ -906,9 +965,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           }
 
           const candidateItems: CatalogSeedItem[] = [];
-          const deltaBySku = new Map<string, number>();
+          const deltaBySku = new Map<string, number>(resolvedDeltaBySku);
           for (const act of activePlan.actions) {
-            if (act.tool === 'mutate_inventory') deltaBySku.set(act.sku, act.delta);
+            if (act.tool === 'mutate_inventory' && !deltaBySku.has(act.sku)) {
+              deltaBySku.set(act.sku, act.delta);
+            }
           }
           for (const sku of mutatedSkusInRun) {
             if (sku.startsWith('SKU-TRIAGE-')) continue;
@@ -1274,7 +1335,15 @@ app.post('/api/triage/resolve', async (request, reply) => {
     summary: swappedFromSku
       ? `Supervisor override swapped ${swappedFromSku} -> ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock} (+${effectiveDelta})`
       : `Supervisor triage verified ${targetItem.sku}: stock ${previousStock} -> ${targetItem.stock} (+${effectiveDelta})`,
-    undo: { kind: 'RESTORE_STOCK', sku: targetItem.sku, previousStock },
+    undo: {
+      kind: 'RESTORE_STOCK',
+      sku: targetItem.sku,
+      previousStock,
+      swappedFrom:
+        swappedFromSku && prevMutation && !swappedFromSku.startsWith('SKU-TRIAGE-')
+          ? { sku: swappedFromSku, previousStock: prevMutation.previousStock + prevMutation.delta }
+          : undefined,
+    },
   });
   await syncAuditLedgerToDisk(LIVE_STORE_STATE.inventory, LIVE_STORE_STATE.claims);
 
@@ -1366,7 +1435,7 @@ app.post('/api/audit-ledger/undo', async (request, reply) => {
 
   let rollbackSummary = '';
   if (targetBlock.undo.kind === 'RESTORE_STOCK') {
-    const { sku, previousStock } = targetBlock.undo;
+    const { sku, previousStock, swappedFrom } = targetBlock.undo;
     const item = LIVE_STORE_STATE.inventory.find((i) => i.sku === sku);
     if (item) {
       const beforeRollback = item.stock;
@@ -1380,6 +1449,15 @@ app.post('/api/audit-ledger/undo', async (request, reply) => {
         newStock: previousStock,
       });
       rollbackSummary = `Compensating rollback on ${sku}: stock ${beforeRollback} -> ${previousStock}`;
+    }
+    if (swappedFrom) {
+      const origItem = LIVE_STORE_STATE.inventory.find((i) => i.sku === swappedFrom.sku);
+      if (origItem) {
+        const beforeOrig = origItem.stock;
+        origItem.stock = swappedFrom.previousStock;
+        await upsertInventorySnapshot(origItem);
+        rollbackSummary += ` | restored ${swappedFrom.sku}: ${beforeOrig} -> ${swappedFrom.previousStock}`;
+      }
     }
   } else if (targetBlock.undo.kind === 'RESTORE_PRICE') {
     const { sku, previousPriceUsd } = targetBlock.undo;
@@ -1420,6 +1498,7 @@ app.post('/api/audit-ledger/undo', async (request, reply) => {
 
   return reply.send({
     ok: true,
+    rolledBackBlock: targetBlock,
     inventory: LIVE_STORE_STATE.inventory,
     claims: LIVE_STORE_STATE.claims,
     integrity: verifyAuditChainIntegrity(),

@@ -11,4 +11,5 @@ fixtures/golden-path/*.json
 !fixtures/golden-path/intact-intake-replay.json
 !fixtures/golden-path/damaged-claim-replay.json
 !fixtures/golden-path/triage-ambiguous-replay.json
+!fixtures/golden-path/bench2-intake-replay.json
 data/ledger/
