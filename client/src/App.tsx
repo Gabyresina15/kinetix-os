@@ -1041,16 +1041,6 @@ export default function App() {
               >
                 BENCH #2
               </button>
-              {phase === 'FRAME_LOCKED' && (
-                <button
-                  type="button"
-                  onClick={commitLotAndNext}
-                  className="px-2 py-0.5 rounded font-mono text-[8.5px] font-bold border border-emerald-500/70 bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 cursor-pointer transition-all shadow-[0_0_10px_rgba(16,185,129,0.25)]"
-                  title="Confirm current lot into inventory and advance to the next workbench scene (Shortcut: N)"
-                >
-                  ✓ [N] COMMIT LOT & NEXT →
-                </button>
-              )}
               <span
                 className={`px-2 py-0.5 rounded font-bold border ${phase === 'SCANNING_SCENE' ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse' : phase === 'FRAME_LOCKED' || phase === 'EXECUTING_DAG' ? 'bg-rose-950/80 text-rose-300 border-rose-500/50' : 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50'}`}
               >
