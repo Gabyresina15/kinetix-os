@@ -69,30 +69,29 @@ const INITIAL_STEPS: ExecutionStep[] = [
 ];
 
 export default function App() {
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
+  const [phase, setPhase] = useState<'LIVE_IDLE' | 'SCANNING_SCENE' | 'EXECUTING_DAG' | 'FRAME_LOCKED' | 'ABORTED'>('LIVE_IDLE');
+  const [flashEffect, setFlashEffect] = useState(false);
+  const [voiceBanner, setVoiceBanner] = useState<string | null>(null);
+
   const {
     videoRef,
     canvasRef,
     uploadedImage,
     sourceDims,
     cameraActive,
-    cameraMode,
     startCamera,
     resumeCameraFeed,
     loadPresetImage,
     handleImageUpload,
     captureFrameBase64,
-  } = useSpatialCamera();
+  } = useSpatialCamera((notice) => setVoiceBanner(notice));
 
   const { runStream, abortStream } = useKinetixStream();
   const { enqueue, clearQueue } = useDominoQueue(180);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
-  const [phase, setPhase] = useState<'LIVE_IDLE' | 'SCANNING_SCENE' | 'EXECUTING_DAG' | 'FRAME_LOCKED' | 'ABORTED'>('LIVE_IDLE');
-  const [flashEffect, setFlashEffect] = useState(false);
-  const [voiceBanner, setVoiceBanner] = useState<string | null>(null);
 
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [backendModeBadge, setBackendModeBadge] = useState<'LIVE · BASETEN' | 'REPLAY · FIXTURE'>('LIVE · BASETEN');
@@ -610,7 +609,7 @@ export default function App() {
 
   const switchBenchScene = useCallback(
     (benchUrl: '/hardware-bench1.jpg' | '/hardware-bench.jpg') => {
-      loadPresetImage(benchUrl, true);
+      loadPresetImage(benchUrl);
       resumeCameraFeed();
       setSelectedMaskId(null);
       setMasks([]);
@@ -633,7 +632,7 @@ export default function App() {
       await fetch(apiUrl('/api/reset-demo'), { method: 'POST', headers: apiHeaders() });
     } catch {}
     cancelRecording();
-    loadPresetImage('/hardware-bench1.jpg', true);
+    loadPresetImage('/hardware-bench1.jpg');
     resumeCameraFeed();
     setSelectedMaskId(null);
     setVoiceBanner(null);
@@ -821,13 +820,7 @@ export default function App() {
               setPhase('LIVE_IDLE');
               setMasks([]);
             }}
-            title={
-              cameraMode === 'WEBCAM'
-                ? 'Active: Physical USB/Integrated Webcam Stream'
-                : cameraMode === 'SIMULATED_30FPS'
-                ? 'Active: 30 FPS Live Optical Sensor Stream (Auto-fallback when no physical webcam is attached)'
-                : 'Start Live Camera (Physical Webcam or 30 FPS Live Optical Stream)'
-            }
+            title="Start Physical USB / Integrated Live Webcam Stream"
             className={`px-2.5 py-1.5 rounded border text-[10px] font-bold cursor-pointer uppercase tracking-wide transition-colors flex items-center gap-1.5 ${
               cameraActive
                 ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
@@ -835,7 +828,7 @@ export default function App() {
             }`}
           >
             {cameraActive && <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />}
-            <span>{cameraActive ? (cameraMode === 'WEBCAM' ? 'LIVE CAM · USB' : 'LIVE CAM · 30FPS') : 'Live Cam'}</span>
+            <span>{cameraActive ? 'LIVE CAM · USB' : 'Live Cam'}</span>
           </button>
 
           <button

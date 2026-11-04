@@ -28,6 +28,7 @@ import {
 } from './services/modelProviders';
 import {
   extractRealCropsFromFrame,
+  buildForensicTelegramEvidenceBase64,
   persistErpMutation,
   sanitizeReasoningToTelemetry,
   getPersistenceDb,
@@ -714,6 +715,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
             defectSeverity: valuation.defectSeverity,
             amountUsd: resolvedAmount,
             thresholdUsd: FINANCIAL_GUARDRAIL_LIMIT_USD,
+            bbox: targetObj?.bbox,
             cropBase64: targetObj?.cropBase64,
             guardrailStatus,
             dispatchChannel: exceedsLimit ? undefined : 'AUTO_BELOW_THRESHOLD',
@@ -1049,12 +1051,24 @@ app.post('/api/confirm-guardrail', async (request, reply) => {
   ) as any;
   if (!held) return reply.status(404).send({ ok: false, error: 'NO_HELD_CLAIM_FOUND' });
 
+  const forensicTelegramPhoto = await buildForensicTelegramEvidenceBase64({
+    id: held.id as string,
+    objectLabel: held.objectLabel as string | undefined,
+    reason: held.reason as string,
+    amountUsd: Number(held.amountUsd),
+    baseCostUsd: held.baseCostUsd as number | undefined,
+    damageFactor: held.damageFactor as number | undefined,
+    defectSeverity: held.defectSeverity as string | undefined,
+    bbox: held.bbox as [number, number, number, number] | undefined,
+    cropBase64: held.cropBase64 as string | undefined,
+  });
+
   const dispatch = await dispatchSupplierClaimNotification({
     id: held.id as string,
     mongoId: held.mongoId as string | undefined,
     reason: held.reason as string,
     amountUsd: held.amountUsd as number,
-    cropBase64: held.cropBase64 as string | undefined,
+    cropBase64: forensicTelegramPhoto,
   });
 
   const authorizedAt = new Date().toISOString();
