@@ -404,6 +404,45 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     const hasBasetenKey = hasRealApiKey(process.env.BASETEN_API_KEY);
     const hasMetaKey = hasRealApiKey(process.env.META_MODEL_API_KEY);
 
+    // Launch Muse Wonder / Code policy synthesis at t = 0ms in parallel with Baseten Muse Spark Open
+    const earlyMarginMatch = voiceTranscript.match(
+      /(\d+(?:\.\d+)?)\s*%\s*(?:gross\s*)?(?:margin|margen)|(?:margin|margen)\s*(?:of|de|al|con)?\s*(\d+(?:\.\d+)?)\s*%/i
+    );
+    const earlyMarginPercent = earlyMarginMatch ? Number(earlyMarginMatch[1] || earlyMarginMatch[2]) : 32;
+    const earlyHasCriticalClaim =
+      /\b(crushed|bent|damaged|broken|defect|claim|golpead|aleta|roto|reclamo)\b/i.test(voiceTranscript) &&
+      !/\b(intact|intacto|sin da[ñn]o|zero claim|zero physical defects)\b/i.test(voiceTranscript);
+
+    const earlyMuseCodePromise: Promise<{
+      code: string;
+      modelUsed: string;
+      llmSynthMs: number;
+    } | null> =
+      mode === 'LIVE' && (hasMetaKey || hasBasetenKey)
+        ? (async () => {
+            const synthStarted = Date.now();
+            try {
+              const synth = await callMuseCodeGenerator(
+                earlyMarginPercent,
+                21,
+                voiceTranscript,
+                undefined,
+                earlyHasCriticalClaim
+                  ? { hasCriticalClaim: true, defectSeverity: 'CRITICAL', damageFactor: 0.85 }
+                  : undefined
+              );
+              return {
+                code: synth.code,
+                modelUsed: synth.modelUsed,
+                llmSynthMs: Date.now() - synthStarted,
+              };
+            } catch (codeErr) {
+              app.log.warn(`Early policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
+              return null;
+            }
+          })()
+        : Promise.resolve(null);
+
     if (mode === 'REPLAY' || (!hasBasetenKey && !hasMetaKey)) {
       try {
         const isBench2Transcript =
@@ -553,6 +592,31 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
     );
     const cleanMasks = dynamicRawMasks.filter((m) => referencedMaskIds.has(m.id) || m.isSensitivePII);
     const finalMasks = cleanMasks.length > 0 ? cleanMasks : dynamicRawMasks.slice(0, 4);
+
+    // Pre-warm 512x512 Muse Image synthesis in parallel with SAM 3.1 IoU refinement so Stage 1 finishes near-instantly
+    const studioActionPlan = activePlan.actions.find((a) => a.tool === 'generate_studio_catalog');
+    const prewarmedStudioImagePromise: Promise<{
+      imageUrl: string;
+      usedLiveApi: boolean;
+      resolution: string;
+      synthesisLatencyMs: number;
+    } | null> =
+      studioActionPlan && studioActionPlan.tool === 'generate_studio_catalog' && mode === 'LIVE' && hasMetaKey
+        ? (async () => {
+            const imgStarted = Date.now();
+            try {
+              const compiledPrompt = compileMuseImagePromptFromDna(studioActionPlan.visualDna);
+              const synth = await callMuseImageStudioSynthesis(compiledPrompt);
+              return {
+                ...synth,
+                synthesisLatencyMs: Date.now() - imgStarted,
+              };
+            } catch {
+              return null;
+            }
+          })()
+        : Promise.resolve(null);
+
     const sam = mode === 'LIVE' && hasMetaKey
       ? await refineMasksWithSam31(body.frameBase64, finalMasks)
       : { masks: finalMasks, used: false, latencyMs: 0, refined: 0 };
@@ -632,42 +696,8 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
       }
     }
 
-    // Pre-warm Muse Code / Wonder LLM synthesis in parallel with Stage 1 so Stage 2 sandbox execution is near-instant
-    const repriceActionPlan = activePlan.actions.find((a) => a.tool === 'recalculate_margins_vm');
-    const claimActionPlan = activePlan.actions.find((a) => a.tool === 'quarantine_and_claim');
-    const prewarmedMuseCodePromise: Promise<{
-      code: string;
-      modelUsed: string;
-      llmSynthMs: number;
-    } | null> =
-      repriceActionPlan && repriceActionPlan.tool === 'recalculate_margins_vm' && mode === 'LIVE' && (hasMetaKey || hasBasetenKey)
-        ? (async () => {
-            const synthStarted = Date.now();
-            try {
-              const synth = await callMuseCodeGenerator(
-                repriceActionPlan.targetMarginPercent,
-                repriceActionPlan.taxRatePercent,
-                voiceTranscript,
-                undefined,
-                claimActionPlan && claimActionPlan.tool === 'quarantine_and_claim'
-                  ? {
-                      hasCriticalClaim: (claimActionPlan.claimAmountUsd ?? 0) >= FINANCIAL_GUARDRAIL_LIMIT_USD,
-                      defectSeverity: claimActionPlan.defectSeverity,
-                      damageFactor: claimActionPlan.damageFactor,
-                    }
-                  : undefined
-              );
-              return {
-                code: synth.code,
-                modelUsed: synth.modelUsed,
-                llmSynthMs: Date.now() - synthStarted,
-              };
-            } catch (codeErr) {
-              app.log.warn(`Policy synthesis fell back to deterministic formula: ${(codeErr as Error).message}`);
-              return null;
-            }
-          })()
-        : Promise.resolve(null);
+    // Reuse t=0ms parallel Muse Wonder policy synthesis so Stage 2 executes in ~2ms with zero wait
+    const prewarmedMuseCodePromise = earlyMuseCodePromise;
 
     async function runIsolatedToolNode<T>(
       toolName: string,
@@ -887,12 +917,20 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           let resolution = 'SVG_FALLBACK';
           let synthesisLatencyMs = 0;
           if (mode === 'LIVE' && hasMetaKey) {
-            const imageStartedAt = Date.now();
-            const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt, signal);
-            synthesisLatencyMs = Date.now() - imageStartedAt;
-            studioUrl = synth.imageUrl;
-            usedLive = synth.usedLiveApi;
-            resolution = synth.resolution;
+            const prewarmedImg = await prewarmedStudioImagePromise;
+            if (prewarmedImg) {
+              studioUrl = prewarmedImg.imageUrl;
+              usedLive = prewarmedImg.usedLiveApi;
+              resolution = prewarmedImg.resolution;
+              synthesisLatencyMs = prewarmedImg.synthesisLatencyMs;
+            } else {
+              const imageStartedAt = Date.now();
+              const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt, signal);
+              synthesisLatencyMs = Date.now() - imageStartedAt;
+              studioUrl = synth.imageUrl;
+              usedLive = synth.usedLiveApi;
+              resolution = synth.resolution;
+            }
           }
 
           if (signal.aborted) return;

@@ -88,7 +88,7 @@ export default function App() {
   } = useSpatialCamera((notice) => setVoiceBanner(notice));
 
   const { runStream, abortStream } = useKinetixStream();
-  const { enqueue, clearQueue } = useDominoQueue(180);
+  const { enqueue, clearQueue } = useDominoQueue(55);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -104,6 +104,19 @@ export default function App() {
   const [undoingTxId, setUndoingTxId] = useState<string | null>(null);
 
   const isBusy = phase === 'SCANNING_SCENE' || phase === 'EXECUTING_DAG';
+  const [scanElapsedMs, setScanElapsedMs] = useState(0);
+
+  useEffect(() => {
+    if (!isBusy) {
+      setScanElapsedMs(0);
+      return;
+    }
+    const started = performance.now();
+    const id = window.setInterval(() => {
+      setScanElapsedMs(Math.round(performance.now() - started));
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [isBusy]);
 
   const [masks, setMasks] = useState<SpatialMask[]>([]);
   const [activePulse, setActivePulse] = useState<{ id: string; actionText: string } | null>(null);
@@ -139,6 +152,10 @@ export default function App() {
   const [reasoningTrace, setReasoningTrace] = useState('');
   const [triageSkuChoice, setTriageSkuChoice] = useState<string>('');
   const [triageCustomMode, setTriageCustomMode] = useState<boolean>(false);
+  const [triageSearchQuery, setTriageSearchQuery] = useState<string>('');
+  const [triageCategoryFilter, setTriageCategoryFilter] = useState<
+    'MATCHED' | 'ALL' | 'GPU' | 'MOBO' | 'CPU' | 'RAM' | 'SSD' | 'PSU' | 'COOLER'
+  >('MATCHED');
   const [triageNewSku, setTriageNewSku] = useState<string>('');
   const [triageNewName, setTriageNewName] = useState<string>('');
   const [triageNewCost, setTriageNewCost] = useState<string>('95');
@@ -329,11 +346,18 @@ export default function App() {
       piiRedacted: 0,
     }));
     setSteps(
-      INITIAL_STEPS.map((s, idx) => ({
-        ...s,
-        status: idx === 0 ? 'RUNNING' : 'PENDING',
-        detail: idx === 0 ? 'Scanning scene & planning multimodal DAG...' : undefined,
-      }))
+      INITIAL_STEPS.map((s) => {
+        if (s.id === 'sam_lock') {
+          return { ...s, status: 'RUNNING', detail: 'ViT HD patching & 2D spatial ROI grounding...' };
+        }
+        if (s.id === 'spark_plan') {
+          return { ...s, status: 'RUNNING', detail: 'Streaming multimodal spatial DAG plan from Baseten...' };
+        }
+        if (s.id === 'recalculate_margins_vm') {
+          return { ...s, status: 'RUNNING', detail: 'Pre-warming 50ms commercial policy AST in parallel (t=0ms)...' };
+        }
+        return { ...s, status: 'PENDING', detail: undefined };
+      })
     );
     await fetchLiveLedger();
 
@@ -745,6 +769,8 @@ export default function App() {
       setSelectedMaskId(m.id);
       setTriageCustomMode(false);
       setTriageSkuChoice('');
+      setTriageSearchQuery('');
+      setTriageCategoryFilter('MATCHED');
       const cleanLbl = (m.label || m.id).replace(/\s*\[PENDING.*?\]/i, '').trim();
       setTriageNewSku(
         `SKU-${cleanLbl.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 18) || 'CUSTOM'}`
@@ -1014,13 +1040,35 @@ export default function App() {
             )}
 
             {phase === 'SCANNING_SCENE' && masks.length === 0 && (cameraActive || uploadedImage) && (
-              <div className="absolute inset-0 pointer-events-none overflow-hidden bg-[linear-gradient(to_right,#22d3ee08_1px,transparent_1px),linear-gradient(to_bottom,#22d3ee08_1px,transparent_1px)] bg-[size:32px_32px]">
+              <div className="absolute inset-0 pointer-events-none overflow-hidden bg-[linear-gradient(to_right,#22d3ee0c_1px,transparent_1px),linear-gradient(to_bottom,#22d3ee0c_1px,transparent_1px)] bg-[size:28px_28px]">
+                {/* Corner Tactical Radar Reticles */}
+                <div className="absolute top-3 left-3 w-5 h-5 border-t-2 border-l-2 border-cyan-400/80" />
+                <div className="absolute top-3 right-3 w-5 h-5 border-t-2 border-r-2 border-cyan-400/80" />
+                <div className="absolute bottom-3 left-3 w-5 h-5 border-b-2 border-l-2 border-cyan-400/80" />
+                <div className="absolute bottom-3 right-3 w-5 h-5 border-b-2 border-r-2 border-cyan-400/80" />
+
                 <div
                   className="absolute left-0 right-0 h-[3px] bg-cyan-400 shadow-[0_0_24px_#22d3ee]"
-                  style={{ animation: 'kinetix-scan 2s ease-in-out infinite' }}
+                  style={{ animation: 'kinetix-scan 1.45s ease-in-out infinite' }}
                 />
-                <div className="absolute bottom-4 right-4 text-[10px] font-mono tracking-widest text-cyan-300 bg-slate-950/80 border border-cyan-500/40 px-2 py-1 rounded shadow-lg flex items-center gap-2">
-                  <Zap className="w-3 h-3 text-cyan-400 animate-pulse" /> SPATIAL MAPPING IN PROGRESS
+
+                <div className="absolute top-3 left-10 text-[9px] font-mono tracking-wider text-cyan-300/90 bg-slate-950/85 border border-cyan-500/40 px-2 py-0.5 rounded flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                  <span>PARALLEL PIPELINE: MUSE SPARK + SAM 3.1 + MUSE WONDER (t=0ms)</span>
+                </div>
+
+                <div className="absolute bottom-4 left-4 right-4 text-[10px] font-mono tracking-wider text-cyan-200 bg-slate-950/90 border border-cyan-500/50 px-3 py-1.5 rounded shadow-[0_0_20px_rgba(6,182,212,0.25)] flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 truncate">
+                    <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse shrink-0" />
+                    <span className="truncate">
+                      {scanElapsedMs < 2200
+                        ? 'PHASE 1/3 · ViT 1080p PATCHING & EDGE PII SHIELDING...'
+                        : scanElapsedMs < 5000
+                        ? 'PHASE 2/3 · GROUNDING 2D BOUNDING BOXES & SAM 3.1 IoU...'
+                        : 'PHASE 3/3 · LOCKING MULTI-TOOL DAG & 50ms SANDBOX POLICY...'}
+                    </span>
+                  </span>
+                  <span className="text-cyan-400 font-bold shrink-0">{(scanElapsedMs / 1000).toFixed(1)}s</span>
                 </div>
               </div>
             )}
@@ -1074,6 +1122,38 @@ export default function App() {
                   .sort((a, b) => b.score - a.score);
 
                 const topCandidates = scoredCatalog.slice(0, 3).map((s) => s.item);
+                const matchesCategoryPill = (
+                  it: InventoryItem,
+                  cat: 'MATCHED' | 'ALL' | 'GPU' | 'MOBO' | 'CPU' | 'RAM' | 'SSD' | 'PSU' | 'COOLER'
+                ): boolean => {
+                  const s = it.sku.toUpperCase();
+                  if (cat === 'ALL' || cat === 'MATCHED') return true;
+                  if (cat === 'GPU') return s.startsWith('SKU-GPU-');
+                  if (cat === 'MOBO') return s.startsWith('SKU-MB-');
+                  if (cat === 'CPU') return s.startsWith('SKU-INTEL-') || s.startsWith('SKU-AMD-');
+                  if (cat === 'RAM') return s.includes('DDR');
+                  if (cat === 'SSD') return s.includes('NVME') || s.includes('SSD');
+                  if (cat === 'PSU') return s.startsWith('SKU-PSU-');
+                  if (cat === 'COOLER') return s.startsWith('SKU-AIR-') || s.startsWith('SKU-AIO-');
+                  return true;
+                };
+
+                const searchTrimmed = triageSearchQuery.trim().toLowerCase();
+                const visibleCandidates =
+                  searchTrimmed.length > 0
+                    ? scoredCatalog
+                        .map((s) => s.item)
+                        .filter(
+                          (it) =>
+                            matchesCategoryPill(it, triageCategoryFilter) &&
+                            `${it.sku} ${it.name}`.toLowerCase().includes(searchTrimmed)
+                        )
+                    : triageCategoryFilter === 'MATCHED'
+                    ? topCandidates
+                    : scoredCatalog
+                        .map((s) => s.item)
+                        .filter((it) => matchesCategoryPill(it, triageCategoryFilter));
+
                 const activeSku = triageCustomMode
                   ? (triageNewSku || fallbackSlugSku).trim().toUpperCase()
                   : triageSkuChoice || topCandidates[0]?.sku || fallbackSlugSku;
@@ -1173,7 +1253,7 @@ export default function App() {
                 };
 
                 return (
-                  <div className="absolute bottom-3 right-3 bg-slate-950/95 border border-amber-500/60 rounded-lg p-3 w-80 shadow-[0_0_30px_rgba(0,0,0,0.9)] backdrop-blur-md z-50 animate-in fade-in slide-in-from-bottom-4">
+                  <div className="absolute bottom-3 right-3 bg-slate-950/95 border border-amber-500/60 rounded-lg p-3 w-[348px] shadow-[0_0_36px_rgba(0,0,0,0.95)] backdrop-blur-md z-50 animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-start mb-2 border-b border-slate-800 pb-1.5">
                       <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wider">
                         <Scan className="w-3 h-3" /> SUPERVISOR TRIAGE & OVERRIDE
@@ -1196,7 +1276,11 @@ export default function App() {
                     {/* Mode switcher: Catalog Matches vs + Add New SKU */}
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">
-                        {triageCustomMode ? 'CREATE NEW CATALOG SKU' : 'AI SUGGESTED CATALOG SKUS'}
+                        {triageCustomMode
+                          ? 'CREATE NEW CATALOG SKU'
+                          : triageCategoryFilter === 'MATCHED' && !searchTrimmed
+                          ? 'AI SUGGESTED CATALOG SKUS'
+                          : `CATALOG BROWSER (${visibleCandidates.length} SKUS)`}
                       </span>
                       <button
                         type="button"
@@ -1213,52 +1297,100 @@ export default function App() {
 
                     {!triageCustomMode ? (
                       <div className="space-y-1.5 mb-2.5">
-                        <div className="space-y-1 max-h-36 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                          {topCandidates.map((cand, idx) => {
-                            const selected = cand.sku === activeSku;
+                        {/* Tactical Search Input */}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={triageSearchQuery}
+                            onChange={(e) => setTriageSearchQuery(e.target.value)}
+                            placeholder="Filter 31 SKUs by brand, model or code..."
+                            className="w-full bg-slate-900/90 border border-slate-700/80 rounded px-2.5 py-1 text-[9.5px] font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 transition-colors"
+                          />
+                          {triageSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setTriageSearchQuery('')}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] font-mono text-slate-400 hover:text-white cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Category Filter Pills */}
+                        <div className="flex items-center gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                          {(
+                            [
+                              { id: 'MATCHED', label: 'AI TOP 3' },
+                              { id: 'ALL', label: 'ALL (31)' },
+                              { id: 'GPU', label: 'GPU' },
+                              { id: 'MOBO', label: 'MOBO' },
+                              { id: 'CPU', label: 'CPU' },
+                              { id: 'RAM', label: 'RAM' },
+                              { id: 'SSD', label: 'SSD' },
+                              { id: 'PSU', label: 'PSU' },
+                              { id: 'COOLER', label: 'COOLER' },
+                            ] as const
+                          ).map((pill) => {
+                            const activePill = triageCategoryFilter === pill.id;
                             return (
                               <button
-                                key={cand.sku}
+                                key={pill.id}
                                 type="button"
-                                onClick={() => setTriageSkuChoice(cand.sku)}
-                                className={`w-full text-left px-2 py-1.5 rounded border transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                                  selected
-                                    ? 'border-amber-400 bg-amber-950/35 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)]'
-                                    : 'border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-600'
+                                onClick={() => setTriageCategoryFilter(pill.id)}
+                                className={`px-1.5 py-0.5 rounded font-mono text-[8px] font-bold border shrink-0 cursor-pointer transition-colors ${
+                                  activePill
+                                    ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/60 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+                                    : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:border-slate-600 hover:text-slate-200'
                                 }`}
                               >
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-[10px] font-bold truncate flex items-center gap-1">
-                                    {idx === 0 && (
-                                      <span className="text-[7px] px-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
-                                        TOP
-                                      </span>
-                                    )}
-                                    <span className="truncate">{cand.name}</span>
-                                  </div>
-                                  <div className="text-[8.5px] font-mono text-slate-400 truncate">
-                                    {cand.sku} · Base ${cand.baseCostUsd.toFixed(0)} · Stock {cand.stock}u
-                                  </div>
-                                </div>
-                                <span className="text-[9.5px] font-mono font-bold text-emerald-400 shrink-0">
-                                  ${cand.sellPriceUsd.toFixed(2)}
-                                </span>
+                                {pill.label}
                               </button>
                             );
                           })}
                         </div>
 
-                        <select
-                          value={activeSku}
-                          onChange={(e) => setTriageSkuChoice(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[9.5px] font-mono text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer"
-                        >
-                          {catalogItems.map((it) => (
-                            <option key={it.sku} value={it.sku}>
-                              {it.sku} — {it.name} (${it.sellPriceUsd.toFixed(2)})
-                            </option>
-                          ))}
-                        </select>
+                        {/* Custom HUD SKU Cards (No native Windows <select> or white scrollbar) */}
+                        <div className="space-y-1 max-h-44 overflow-y-auto pr-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                          {visibleCandidates.map((cand) => {
+                            const selected = cand.sku === activeSku;
+                            const isTopAiMatch = cand.sku === topCandidates[0]?.sku;
+                            return (
+                              <button
+                                key={cand.sku}
+                                type="button"
+                                onClick={() => setTriageSkuChoice(cand.sku)}
+                                className={`w-full text-left px-2.5 py-1.5 rounded border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                  selected
+                                    ? 'border-amber-400 bg-amber-950/35 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)]'
+                                    : 'border-slate-800/90 bg-slate-900/85 text-slate-300 hover:border-cyan-500/40 hover:bg-slate-900'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-[10px] font-bold truncate flex items-center gap-1">
+                                    {isTopAiMatch && (
+                                      <span className="text-[7px] px-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono shrink-0">
+                                        TOP AI
+                                      </span>
+                                    )}
+                                    <span className="truncate">{cand.name}</span>
+                                  </div>
+                                  <div className="text-[8.5px] font-mono text-slate-400 truncate">
+                                    <span className="text-cyan-400/90">{cand.sku}</span> · Base ${cand.baseCostUsd.toFixed(0)} · Stock {cand.stock}u
+                                  </div>
+                                </div>
+                                <span className="text-[9.5px] font-mono font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-1.5 py-0.5 rounded shrink-0">
+                                  ${cand.sellPriceUsd.toFixed(2)}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {visibleCandidates.length === 0 && (
+                            <div className="text-[9.5px] font-mono text-slate-500 text-center py-4 border border-dashed border-slate-800 rounded">
+                              No catalog SKU matches "{triageSearchQuery}". Click "+ NEW SKU NOT IN LIST" above.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-1.5 mb-2.5 bg-slate-900/70 border border-slate-800 rounded p-2">
@@ -1556,6 +1688,11 @@ export default function App() {
                   </div>
                 )}
               </div>
+            ) : isBusy ? (
+              <div className="border border-rose-500/25 bg-rose-950/10 rounded p-2.5 flex items-center gap-2.5 text-[10px] font-mono text-rose-300/90 animate-pulse">
+                <Loader2 className="w-3.5 h-3.5 text-rose-400 animate-spin shrink-0" />
+                <span>EVALUATING STRUCTURAL DEFECTS & $50 USD GUARDRAIL...</span>
+              </div>
             ) : (
               <div className="text-[10px] text-slate-600 text-center py-4 italic">
                 No claims processed in current session
@@ -1635,6 +1772,24 @@ export default function App() {
                   </div>
                 )}
               </div>
+            ) : isBusy ? (
+              <div className="border border-cyan-500/30 bg-cyan-950/15 rounded p-2.5 space-y-2 animate-pulse">
+                <div className="flex items-center justify-between text-[9.5px] font-mono text-cyan-300">
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                    <span>EXTRACTING VISUAL DNA & SYNTHESIZING 512x512...</span>
+                  </span>
+                  <span>{(scanElapsedMs / 1000).toFixed(1)}s</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="h-14 rounded border border-slate-800 bg-slate-900/70 flex items-center justify-center text-[8px] font-mono text-slate-400">
+                    OPTICAL ROI CROP
+                  </div>
+                  <div className="h-14 rounded border border-cyan-800/50 bg-cyan-950/30 flex items-center justify-center text-[8px] font-mono text-cyan-300">
+                    MUSE IMAGE 512x512
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="text-[10px] text-slate-600 text-center py-4 italic flex-1 flex items-center justify-center">
                 Awaiting product spatial targeting...
@@ -1671,6 +1826,14 @@ export default function App() {
                     ASSERTIONS: {vmExecution.invariantsPassed !== false ? 'PASS' : 'FAIL'}
                   </span>
                 </div>
+              </div>
+            ) : isBusy ? (
+              <div className="border border-amber-500/30 bg-amber-950/15 rounded p-2 flex items-center justify-between text-[9.5px] font-mono text-amber-300 animate-pulse">
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
+                  <span>PRE-WARMING MUSE WONDER AST AT t=0ms → QUICKJS WASM (50ms CAP)...</span>
+                </span>
+                <span>{(scanElapsedMs / 1000).toFixed(1)}s</span>
               </div>
             ) : (
               <div className="text-[10px] text-slate-600 text-center py-2.5 italic">
