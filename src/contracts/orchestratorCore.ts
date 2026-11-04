@@ -34,13 +34,15 @@ export const VisualDnaSchema = z.object({
 
 export type VisualDna = z.infer<typeof VisualDnaSchema>;
 
-export function compileMuseImagePromptFromDna(dna: VisualDna): string {
+export function compileMuseImagePromptFromDna(dna: VisualDna, productTitle?: string): string {
+  const titleClause = productTitle ? ` (${productTitle})` : '';
   return [
-    `Commercial studio product photography of a ${dna.containerGeometry}.`,
+    `Commercial 512x512 studio product photograph of this exact ${dna.containerGeometry}${titleClause}.`,
+    `Preserve 100% of the exact physical geometry, camera angle, fan/grille layout, proportions, and shroud details from the reference crop.`,
     `Exact color palette: ${dna.exactColorPalette}.`,
     `Surface & material: ${dna.surfaceMaterial}.`,
     `Visible markings/details: "${dna.detectedBrandOrText}".`,
-    `Centered on a dark slate tech podium, dramatic cyan and warm amber rim lighting, crisp 512x512 studio hardware catalog asset.`,
+    `Replace only the background with a clean dark slate studio surface and subtle cyan and warm rim lighting.`,
   ].join(' ');
 }
 
@@ -371,8 +373,7 @@ export function tightenAndDeoverlapBoxes<
   const result = objects.map((o) => ({ ...o, bbox: [...o.bbox] as [number, number, number, number] }));
 
   for (let i = 0; i < result.length; i++) {
-    for (let j = 0; j < result.length; j++) {
-      if (i === j) continue;
+    for (let j = i + 1; j < result.length; j++) {
       const a = result[i].bbox;
       const b = result[j].bbox;
 
@@ -384,8 +385,24 @@ export function tightenAndDeoverlapBoxes<
       const overlapX = Math.min(aRight, bRight) - Math.max(a[0], b[0]);
       const overlapY = Math.min(aBottom, bBottom) - Math.max(a[1], b[1]);
 
-      if (overlapX > 0 && overlapY > 0 && a[0] < b[0] && b[0] - a[0] >= 0.03) {
-        a[2] = Number(Math.max(0.03, b[0] - a[0] - 0.008).toFixed(3));
+      if (overlapX <= 0.005 || overlapY <= 0.005) continue;
+
+      const upper = a[1] <= b[1] ? a : b;
+      const lower = a[1] <= b[1] ? b : a;
+      const isVerticallyStacked = upper[1] + upper[3] * 0.55 < lower[1];
+
+      if (isVerticallyStacked) {
+        const trimmedH = Number((lower[1] - upper[1] - 0.006).toFixed(3));
+        if (trimmedH >= upper[3] * 0.60 && trimmedH >= 0.035) {
+          upper[3] = trimmedH;
+        }
+      } else {
+        const left = a[0] <= b[0] ? a : b;
+        const right = a[0] <= b[0] ? b : a;
+        const trimmedW = Number((right[0] - left[0] - 0.006).toFixed(3));
+        if (trimmedW >= left[2] * 0.60 && trimmedW >= 0.035) {
+          left[2] = trimmedW;
+        }
       }
     }
   }

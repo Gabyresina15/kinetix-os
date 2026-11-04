@@ -387,7 +387,8 @@ export async function callBasetenMuseSparkOpen(
 
 export async function callMuseImageStudioSynthesis(
   prompt: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sourceCropBase64?: string
 ): Promise<{
   imageUrl: string;
   usedLiveApi: boolean;
@@ -400,6 +401,57 @@ export async function callMuseImageStudioSynthesis(
 
   if (!isRealKey(apiKey)) {
     return { imageUrl: STUDIO_RENDER_FALLBACK_URI, usedLiveApi: false, resolution: 'SVG_FALLBACK' };
+  }
+
+  const formatB64DataUri = (b64: string) => {
+    const mime = b64.startsWith('UklGR')
+      ? 'image/webp'
+      : b64.startsWith('/9j/')
+      ? 'image/jpeg'
+      : 'image/png';
+    return `data:${mime};base64,${b64}`;
+  };
+
+  // Primary: 1:1 Image-to-Image Studio Synthesis via /images/edits using the real optical camera crop
+  if (sourceCropBase64 && sourceCropBase64.startsWith('data:image')) {
+    try {
+      const editResponse = await fetch(`${baseUrl}/images/edits`, {
+        method: 'POST',
+        signal,
+        headers: {
+          Authorization: `Bearer ${apiKey!.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          prompt,
+          n: 1,
+          size: requestedSize,
+          response_format: 'b64_json',
+          images: [{ image_url: sourceCropBase64 }],
+        }),
+      });
+      if (editResponse.ok) {
+        const editData = (await editResponse.json()) as any;
+        const b64 = editData.data?.[0]?.b64_json;
+        const url = editData.data?.[0]?.url;
+        if (b64) {
+          return {
+            imageUrl: formatB64DataUri(b64),
+            usedLiveApi: true,
+            resolution: `${requestedSize} (1:1 Ref)`,
+          };
+        }
+        if (url) {
+          return { imageUrl: url, usedLiveApi: true, resolution: `${requestedSize} (1:1 Ref)` };
+        }
+      } else {
+        const errText = await editResponse.text();
+        console.warn(`[Muse Image Edits] HTTP ${editResponse.status}: ${errText.slice(0, 220)}`);
+      }
+    } catch (editErr) {
+      console.warn('[Muse Image Edits] fallback to generations:', (editErr as Error).message);
+    }
   }
 
   const trySize = async (size: string) => {
@@ -428,7 +480,7 @@ export async function callMuseImageStudioSynthesis(
     const data = (await response.json()) as any;
     const b64 = data.data?.[0]?.b64_json;
     const url = data.data?.[0]?.url;
-    if (b64) return { imageUrl: `data:image/png;base64,${b64}`, usedLiveApi: true, resolution: size };
+    if (b64) return { imageUrl: formatB64DataUri(b64), usedLiveApi: true, resolution: size };
     if (url) return { imageUrl: url, usedLiveApi: true, resolution: size };
     return null;
   };
@@ -527,7 +579,19 @@ function boxesAreSameObject(
   const iou = computeIoU(original, refined);
   const areaRatio = refinedArea / originalArea;
 
-  return centerInside && iou >= 0.35 && areaRatio >= 0.55 && areaRatio <= 1.55;
+  const xA = Math.max(original[0], refined[0]);
+  const yA = Math.max(original[1], refined[1]);
+  const xB = Math.min(original[0] + original[2], refined[0] + refined[2]);
+  const yB = Math.min(original[1] + original[3], refined[1] + refined[3]);
+  const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+  const containmentInOriginal = interArea / Math.max(0.0001, refinedArea);
+
+  return (
+    centerInside &&
+    (iou >= 0.22 || containmentInOriginal >= 0.65) &&
+    areaRatio >= 0.22 &&
+    areaRatio <= 1.65
+  );
 }
 
 function parseSamBoxes(
@@ -596,8 +660,14 @@ export async function refineMasksWithSam31<T extends SamMask>(
   const prompt = `<0f>${actionable
     .map((mask, index) => {
       const boxArea = mask.bbox[2] * mask.bbox[3];
-      const adaptivePad = boxArea < 0.012 ? 0.16 : 0.08;
-      const search = inflateBox(mask.bbox, adaptivePad);
+      const padX = boxArea < 0.008 ? 0.25 : 0.0;
+      const padY = boxArea < 0.008 ? 0.12 : 0.0;
+      const search: [number, number, number, number] = [
+        Math.max(0, mask.bbox[0] - mask.bbox[2] * padX),
+        Math.max(0, mask.bbox[1] - mask.bbox[3] * padY),
+        Math.min(1, mask.bbox[2] * (1 + padX * 2)),
+        Math.min(1, mask.bbox[3] * (1 + padY * 2)),
+      ];
 
       const maxW = size.w - 1;
       const maxH = size.h - 1;

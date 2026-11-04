@@ -896,7 +896,7 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           const targetObj =
             normalizedObjects.find((o) => o.id === action.targetMaskId) ||
             normalizedObjects[normalizedObjects.length - 1];
-          const compiledStudioPrompt = compileMuseImagePromptFromDna(action.visualDna);
+          const compiledStudioPrompt = compileMuseImagePromptFromDna(action.visualDna, action.productTitle);
 
           let studioUrl = STUDIO_RENDER_FALLBACK_URI;
           let usedLive = false;
@@ -904,7 +904,11 @@ app.post('/api/orchestrate-stream', async (request, reply) => {
           let synthesisLatencyMs = 0;
           if (mode === 'LIVE' && hasMetaKey) {
             const imageStartedAt = Date.now();
-            const synth = await callMuseImageStudioSynthesis(compiledStudioPrompt, signal);
+            const synth = await callMuseImageStudioSynthesis(
+              compiledStudioPrompt,
+              signal,
+              targetObj?.cropBase64
+            );
             synthesisLatencyMs = Date.now() - imageStartedAt;
             studioUrl = synth.imageUrl;
             usedLive = synth.usedLiveApi;
