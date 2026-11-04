@@ -740,6 +740,13 @@ export default function App() {
     [loadPresetImage, resumeCameraFeed, clearQueue, abortStream]
   );
 
+  const commitLotAndNext = useCallback(() => {
+    const nextBench =
+      uploadedImage === '/hardware-bench.jpg' ? '/hardware-bench1.jpg' : '/hardware-bench.jpg';
+    switchBenchScene(nextBench);
+    speakTactical('Inbound lot committed. Advancing to next workbench.');
+  }, [uploadedImage, switchBenchScene, speakTactical]);
+
   const resetDemoState = useCallback(async () => {
     try {
       await fetch(apiUrl('/api/reset-demo'), { method: 'POST', headers: apiHeaders() });
@@ -785,6 +792,10 @@ export default function App() {
         e.preventDefault();
         setLedgerOpen((prev) => !prev);
       }
+      if (e.code === 'KeyN') {
+        e.preventDefault();
+        commitLotAndNext();
+      }
       if (e.code === 'Escape') {
         e.preventDefault();
         if (ledgerOpen) {
@@ -796,7 +807,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [triggerOrchestration, authorizeGuardrailClaim, resetDemoState, phase, abortRun, voiceText, ledgerOpen]);
+  }, [triggerOrchestration, authorizeGuardrailClaim, resetDemoState, commitLotAndNext, phase, abortRun, voiceText, ledgerOpen]);
 
   const renderMask = (m: SpatialMask) => {
     const [x, y, w, h] = m.bbox;
@@ -1033,16 +1044,11 @@ export default function App() {
               {phase === 'FRAME_LOCKED' && (
                 <button
                   type="button"
-                  onClick={() => {
-                    const nextBench =
-                      uploadedImage === '/hardware-bench.jpg' ? '/hardware-bench1.jpg' : '/hardware-bench.jpg';
-                    switchBenchScene(nextBench);
-                    speakTactical('Inbound lot committed. Advancing to next workbench.');
-                  }}
+                  onClick={commitLotAndNext}
                   className="px-2 py-0.5 rounded font-mono text-[8.5px] font-bold border border-emerald-500/70 bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 cursor-pointer transition-all shadow-[0_0_10px_rgba(16,185,129,0.25)]"
-                  title="Confirm current lot into inventory and advance to the next workbench scene"
+                  title="Confirm current lot into inventory and advance to the next workbench scene (Shortcut: N)"
                 >
-                  ✓ COMMIT LOT & NEXT →
+                  ✓ [N] COMMIT LOT & NEXT →
                 </button>
               )}
               <span
@@ -1595,18 +1601,35 @@ export default function App() {
             {!isBusy ? (
               <button
                 onClick={triggerOrchestration}
-                className="flex-1 py-2 rounded-md bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(6,182,212,0.4)] cursor-pointer"
+                className="flex-1 py-2 px-3 rounded-md bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10.5px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(6,182,212,0.4)] cursor-pointer truncate"
               >
-                <Play className="w-4 h-4 fill-slate-950" /> RUN SPATIAL ORCHESTRATION (SPACEBAR)
+                <Play className="w-3.5 h-3.5 fill-slate-950 shrink-0" />
+                <span className="truncate">RUN SPATIAL ORCHESTRATION (SPACEBAR)</span>
               </button>
             ) : (
               <button
                 onClick={abortRun}
-                className="flex-1 py-2 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(225,29,72,0.4)] cursor-pointer"
+                className="flex-1 py-2 px-3 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[10.5px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(225,29,72,0.4)] cursor-pointer truncate"
               >
-                <XCircle className="w-4 h-4" /> [ESC] ABORT ORCHESTRATION
+                <XCircle className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">[ESC] ABORT ORCHESTRATION</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={commitLotAndNext}
+              disabled={isBusy}
+              title="Commit current lot into ERP inventory and advance to the next workbench scene (Shortcut: N)"
+              className={`px-3.5 py-2 rounded-md font-extrabold text-[10.5px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+                phase === 'FRAME_LOCKED'
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-[0_0_16px_rgba(16,185,129,0.45)] border border-emerald-300'
+                  : 'bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>[N] COMMIT LOT & NEXT →</span>
+            </button>
           </div>
 
           <div className="relative">

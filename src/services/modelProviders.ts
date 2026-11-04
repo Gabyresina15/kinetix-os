@@ -415,22 +415,9 @@ export async function callMuseImageStudioSynthesis(
   // Primary: 1:1 Image-to-Image Studio Synthesis via /images/edits using the real optical camera crop
   if (sourceCropBase64 && sourceCropBase64.startsWith('data:image')) {
     try {
-      let compactRefUri = sourceCropBase64;
-      try {
-        const sharpMod = (await import('sharp')).default;
-        const rawB64 = sourceCropBase64.replace(/^data:image\/\w+;base64,/, '');
-        const compactBuf = await sharpMod(Buffer.from(rawB64, 'base64'))
-          .resize({ width: 384, height: 384, fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 84 })
-          .toBuffer();
-        compactRefUri = `data:image/jpeg;base64,${compactBuf.toString('base64')}`;
-      } catch {
-        compactRefUri = sourceCropBase64;
-      }
-
       const editSignal = signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(18_500)])
-        : AbortSignal.timeout(18_500);
+        ? AbortSignal.any([signal, AbortSignal.timeout(38_000)])
+        : AbortSignal.timeout(38_000);
       const editResponse = await fetch(`${baseUrl}/images/edits`, {
         method: 'POST',
         signal: editSignal,
@@ -444,7 +431,7 @@ export async function callMuseImageStudioSynthesis(
           n: 1,
           size: requestedSize,
           response_format: 'b64_json',
-          images: [{ image_url: compactRefUri }],
+          images: [{ image_url: sourceCropBase64 }],
         }),
       });
       if (editResponse.ok) {
@@ -472,8 +459,8 @@ export async function callMuseImageStudioSynthesis(
 
   const trySize = async (size: string) => {
     const genSignal = signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(14_000)])
-      : AbortSignal.timeout(14_000);
+      ? AbortSignal.any([signal, AbortSignal.timeout(28_000)])
+      : AbortSignal.timeout(28_000);
     const response = await fetch(`${baseUrl}/images/generations`, {
       method: 'POST',
       signal: genSignal,

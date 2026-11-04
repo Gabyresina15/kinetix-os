@@ -301,7 +301,7 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   quarantine_and_claim: 12_000,
   mutate_inventory: 10_000,
   recalculate_margins_vm: 14_000,
-  generate_studio_catalog: 45_000,
+  generate_studio_catalog: 55_000,
 };
 
 // Stage 1 runs independent spatial & inventory mutations in parallel;
