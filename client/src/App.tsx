@@ -120,18 +120,11 @@ export default function App() {
 
   const [masks, setMasks] = useState<SpatialMask[]>([]);
   const [activePulse, setActivePulse] = useState<{ id: string; actionText: string } | null>(null);
-  const [ttsEnabled, setTtsEnabled] = useState(true);
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
 
-  const speakTactical = useCallback((msg: string) => {
-    if (!ttsEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(msg);
-    u.lang = 'en-US';
-    u.rate = 1.08;
-    u.pitch = 0.92;
-    window.speechSynthesis.speak(u);
-  }, [ttsEnabled]);
+  const speakTactical = useCallback((_msg: string) => {
+    // Browser speechSynthesis intentionally disabled for clean silent UI operation
+  }, []);
 
   const [telemetry, setTelemetry] = useState<TelemetryState>({
     samMs: 0,
@@ -147,6 +140,7 @@ export default function App() {
   ]);
   const [latestClaim, setLatestClaim] = useState<SupplierClaim | null>(null);
   const [latestCatalog, setLatestCatalog] = useState<StudioCatalogResult | null>(null);
+  const [studioPreviewOpen, setStudioPreviewOpen] = useState<boolean>(false);
   const [vmExecution, setVmExecution] = useState<VmExecutionResult | null>(null);
   const [voiceText, setVoiceText] = useState(DEFAULT_PROMPT);
   const [reasoningTrace, setReasoningTrace] = useState('');
@@ -921,13 +915,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4 text-xs">
-          <button
-            onClick={() => setTtsEnabled(!ttsEnabled)}
-            className={`px-2 py-1 rounded border text-[10px] font-bold cursor-pointer uppercase transition-colors ${ttsEnabled ? 'border-cyan-500 bg-cyan-950/40 text-cyan-300' : 'border-slate-700 bg-slate-900 text-slate-500'}`}
-          >
-            TTS: {ttsEnabled ? 'ON' : 'OFF'}
-          </button>
-
           <TelemetryHud telemetry={telemetry} />
 
           <button
@@ -1008,6 +995,104 @@ export default function App() {
         undoingTxId={undoingTxId}
         onUndo={handleUndoTx}
       />
+
+      {studioPreviewOpen && latestCatalog && (
+        <div
+          className="fixed inset-0 z-[95] bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in"
+          onClick={() => setStudioPreviewOpen(false)}
+        >
+          <div
+            className="bg-[#090C12] border border-cyan-500/60 rounded-xl shadow-[0_0_60px_rgba(6,182,212,0.3)] max-w-4xl w-full p-5 flex flex-col gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                <div>
+                  <div className="text-xs font-extrabold uppercase tracking-widest text-white">
+                    MUSE IMAGE 1.0 // 512x512 STUDIO ASSET INSPECTOR
+                  </div>
+                  <div className="text-[10px] font-mono text-cyan-300 mt-0.5">{latestCatalog.title}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="px-2.5 py-1 rounded bg-emerald-950/70 border border-emerald-500/60 text-emerald-300 font-mono text-[10px] font-bold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  DOWNLOADED: Studio-Render-{latestCatalog.title.replace(/\s+/g, '-')}.png
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setStudioPreviewOpen(false)}
+                  className="px-3 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-bold text-[10px] uppercase tracking-wider cursor-pointer"
+                >
+                  CLOSE INSPECTOR
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                  <span>BEFORE // RAW WORKBENCH CAMERA CROP</span>
+                  <span className="text-slate-500">SHARP ROI EXTRACT</span>
+                </div>
+                <div className="relative rounded-lg border border-slate-700 overflow-hidden aspect-square bg-[#050608]">
+                  <img src={latestCatalog.sourceCropUrl} alt="Raw Crop Full" className="w-full h-full object-cover" />
+                  <div className="absolute top-2 left-2 bg-black/80 border border-slate-700 px-2 py-0.5 rounded text-[9px] font-mono text-slate-300">
+                    RAW_CAMERA_ROI
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-cyan-300 font-bold">
+                  <span>AFTER // MUSE IMAGE 1.0 STUDIO RENDER</span>
+                  <span className="text-emerald-400">{latestCatalog.resolution || '512x512 (1:1 Ref)'}</span>
+                </div>
+                <div className="relative rounded-lg border-2 border-cyan-400/70 overflow-hidden aspect-square bg-[#050608] shadow-[0_0_30px_rgba(34,211,238,0.22)]">
+                  <img
+                    src={latestCatalog.studioImageUrl}
+                    alt="Studio Render Full"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute top-2 right-2 bg-cyan-950/90 border border-cyan-400/60 px-2 py-0.5 rounded text-[9px] font-mono text-cyan-200 font-bold">
+                    {latestCatalog.resolution || '512x512 (1:1 Ref)'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {latestCatalog.visualDna && (
+              <div className="grid grid-cols-4 gap-2 pt-1">
+                <div className="bg-slate-900/90 border border-slate-800 rounded p-2">
+                  <div className="text-[8px] font-bold text-cyan-400 uppercase tracking-wider">GEOMETRY</div>
+                  <div className="text-[10px] text-slate-200 truncate mt-0.5">
+                    {latestCatalog.visualDna.containerGeometry}
+                  </div>
+                </div>
+                <div className="bg-slate-900/90 border border-slate-800 rounded p-2">
+                  <div className="text-[8px] font-bold text-cyan-400 uppercase tracking-wider">PALETTE</div>
+                  <div className="text-[10px] text-slate-200 truncate mt-0.5">
+                    {latestCatalog.visualDna.exactColorPalette}
+                  </div>
+                </div>
+                <div className="bg-slate-900/90 border border-slate-800 rounded p-2">
+                  <div className="text-[8px] font-bold text-cyan-400 uppercase tracking-wider">OCR BRAND</div>
+                  <div className="text-[10px] text-slate-200 truncate mt-0.5">
+                    {latestCatalog.visualDna.detectedBrandOrText}
+                  </div>
+                </div>
+                <div className="bg-slate-900/90 border border-slate-800 rounded p-2">
+                  <div className="text-[8px] font-bold text-cyan-400 uppercase tracking-wider">MATERIAL</div>
+                  <div className="text-[10px] text-slate-200 truncate mt-0.5">
+                    {latestCatalog.visualDna.surfaceMaterial}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 grid grid-cols-12 gap-3 p-3 overflow-hidden min-h-0">
         {/* LEFT COLUMN: SPATIAL FEED */}
@@ -1827,6 +1912,7 @@ export default function App() {
                           <a
                             href={latestCatalog.studioImageUrl}
                             download={`Studio-Render-${latestCatalog.title.replace(/\s+/g, '-')}.png`}
+                            onClick={() => setStudioPreviewOpen(true)}
                             className="absolute inset-0 bg-cyan-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-cyan-300 font-bold text-[10px] tracking-widest gap-2 backdrop-blur-sm cursor-pointer"
                           >
                             <Download className="w-4 h-4" /> DOWNLOAD STUDIO ASSET

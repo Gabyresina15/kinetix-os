@@ -1,12 +1,68 @@
 {
-  "updatedAt": "2026-11-04T19:50:16.130Z",
+  "updatedAt": "2026-11-05T01:15:31.592Z",
   "integrity": {
     "valid": true,
-    "blockCount": 0,
-    "headHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    "blockCount": 17,
+    "headHash": "1dceaa570349720c9f9e1ff82cf1fa77efa06ae0837692a75dc50aa1aca5f9ed"
   },
-  "skuCount": 31,
+  "skuCount": 32,
   "inventory": [
+    {
+      "sku": "SKU-MB-ASUS-ROG-B650I",
+      "name": "ASUS ROG Strix B650E-I Gaming WiFi",
+      "stock": 0,
+      "standardInboundLot": 1,
+      "baseCostUsd": 289,
+      "sellPriceUsd": 419.05
+    },
+    {
+      "sku": "SKU-GPU-RTX4080",
+      "name": "NVIDIA GeForce RTX 4080 16GB",
+      "stock": 16,
+      "standardInboundLot": 5,
+      "baseCostUsd": 950,
+      "sellPriceUsd": 1199.99
+    },
+    {
+      "sku": "SKU-AMD-RYZEN-7",
+      "name": "AMD Ryzen 7 7800X3D",
+      "stock": 33,
+      "standardInboundLot": 10,
+      "baseCostUsd": 310,
+      "sellPriceUsd": 535.86
+    },
+    {
+      "sku": "SKU-MB-B760",
+      "name": "MSI MAG B760 Tomahawk WiFi",
+      "stock": 35,
+      "standardInboundLot": 10,
+      "baseCostUsd": 140,
+      "sellPriceUsd": 242
+    },
+    {
+      "sku": "SKU-GPU-RTX4070",
+      "name": "NVIDIA GeForce RTX 4070 12GB",
+      "stock": 48,
+      "standardInboundLot": 15,
+      "baseCostUsd": 480,
+      "sellPriceUsd": 829.71
+    },
+    {
+      "sku": "SKU-NVME-2TB-GEN4",
+      "name": "M.2 NVMe PCIe 4.0 SSD 2TB",
+      "stock": 9,
+      "standardInboundLot": 1,
+      "baseCostUsd": 110,
+      "sellPriceUsd": 206.62
+    },
+    {
+      "sku": "SKU-DDR5-32GB-KIT",
+      "name": "Fury Beast DDR5 32GB (2x16GB) Black",
+      "stock": 16,
+      "standardInboundLot": 2,
+      "baseCostUsd": 95,
+      "sellPriceUsd": 171.58
+    },
     {
       "sku": "SKU-INTEL-CORE-I9",
       "name": "Intel Core i9-14900K",
@@ -40,14 +96,6 @@
       "sellPriceUsd": 549.99
     },
     {
-      "sku": "SKU-AMD-RYZEN-7",
-      "name": "AMD Ryzen 7 7800X3D",
-      "stock": 32,
-      "standardInboundLot": 10,
-      "baseCostUsd": 310,
-      "sellPriceUsd": 399.99
-    },
-    {
       "sku": "SKU-AMD-RYZEN-5",
       "name": "AMD Ryzen 5 7600X",
       "stock": 112,
@@ -62,22 +110,6 @@
       "standardInboundLot": 2,
       "baseCostUsd": 1400,
       "sellPriceUsd": 1799.99
-    },
-    {
-      "sku": "SKU-GPU-RTX4080",
-      "name": "NVIDIA GeForce RTX 4080 16GB",
-      "stock": 15,
-      "standardInboundLot": 5,
-      "baseCostUsd": 950,
-      "sellPriceUsd": 1199.99
-    },
-    {
-      "sku": "SKU-GPU-RTX4070",
-      "name": "NVIDIA GeForce RTX 4070 12GB",
-      "stock": 48,
-      "standardInboundLot": 15,
-      "baseCostUsd": 480,
-      "sellPriceUsd": 599.99
     },
     {
       "sku": "SKU-GPU-RTX4060",
@@ -112,14 +144,6 @@
       "sellPriceUsd": 215
     },
     {
-      "sku": "SKU-DDR5-32GB-KIT",
-      "name": "Fury Beast DDR5 32GB (2x16GB) Black",
-      "stock": 14,
-      "standardInboundLot": 2,
-      "baseCostUsd": 95,
-      "sellPriceUsd": 158
-    },
-    {
       "sku": "SKU-DDR4-32GB-KIT",
       "name": "G.Skill Ripjaws V DDR4 32GB (2x16GB)",
       "stock": 156,
@@ -144,14 +168,6 @@
       "sellPriceUsd": 345
     },
     {
-      "sku": "SKU-NVME-2TB-GEN4",
-      "name": "M.2 NVMe PCIe 4.0 SSD 2TB",
-      "stock": 8,
-      "standardInboundLot": 1,
-      "baseCostUsd": 110,
-      "sellPriceUsd": 185
-    },
-    {
       "sku": "SKU-NVME-1TB-GEN4",
       "name": "WD_BLACK SN850X NVMe M.2 1TB",
       "stock": 84,
@@ -174,14 +190,6 @@
       "standardInboundLot": 2,
       "baseCostUsd": 480,
       "sellPriceUsd": 629.99
-    },
-    {
-      "sku": "SKU-MB-B760",
-      "name": "MSI MAG B760 Tomahawk WiFi",
-      "stock": 34,
-      "standardInboundLot": 10,
-      "baseCostUsd": 140,
-      "sellPriceUsd": 189.99
     },
     {
       "sku": "SKU-MB-X670E",
@@ -257,5 +265,376 @@
     }
   ],
   "claims": [],
-  "blocks": []
+  "blocks": [
+    {
+      "index": 17,
+      "txId": "TX-0017-TNVW",
+      "timestamp": "2026-11-05T01:15:31.592Z",
+      "type": "COMPENSATING_UNDO",
+      "skuOrRef": "TX-0016-VHPQ",
+      "summary": "Compensating rollback on SKU-MB-ASUS-ROG-B650I: stock 1 -> 0 | restored SKU-MB-B760: 34 -> 35",
+      "prevHash": "677c8b4ed1cc34d45f7f3e170c212461407bbdbc967a5d24e3e29630cc5d59aa",
+      "txHash": "1dceaa570349720c9f9e1ff82cf1fa77efa06ae0837692a75dc50aa1aca5f9ed",
+      "reversible": false,
+      "rolledBack": false,
+      "undo": {
+        "kind": "NONE"
+      },
+      "metadata": {
+        "targetTxId": "TX-0016-VHPQ"
+      }
+    },
+    {
+      "index": 16,
+      "txId": "TX-0016-VHPQ",
+      "timestamp": "2026-11-05T01:15:18.679Z",
+      "type": "SUPERVISOR_TRIAGE",
+      "skuOrRef": "SKU-MB-ASUS-ROG-B650I",
+      "summary": "Supervisor override swapped SKU-MB-B760 -> SKU-MB-ASUS-ROG-B650I: stock 0 -> 1 (+1)",
+      "prevHash": "f070adfe198f8a73eb03d5f972288880e748685d48f819e4c4866262c01f37fd",
+      "txHash": "677c8b4ed1cc34d45f7f3e170c212461407bbdbc967a5d24e3e29630cc5d59aa",
+      "reversible": true,
+      "rolledBack": true,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-MB-ASUS-ROG-B650I",
+        "previousStock": 0,
+        "swappedFrom": {
+          "sku": "SKU-MB-B760",
+          "previousStock": 35
+        }
+      }
+    },
+    {
+      "index": 15,
+      "txId": "TX-0015-HD2C",
+      "timestamp": "2026-11-05T01:14:59.904Z",
+      "type": "SUPERVISOR_TRIAGE",
+      "skuOrRef": "SKU-GPU-RTX4080",
+      "summary": "Supervisor override swapped SKU-GPU-RTX4070 -> SKU-GPU-RTX4080: stock 15 -> 16 (+1)",
+      "prevHash": "87e4ed180bed16dde328457034ef43875f1543c59cbed0a21f2af5498ed3d6da",
+      "txHash": "f070adfe198f8a73eb03d5f972288880e748685d48f819e4c4866262c01f37fd",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-GPU-RTX4080",
+        "previousStock": 15,
+        "swappedFrom": {
+          "sku": "SKU-GPU-RTX4070",
+          "previousStock": 49
+        }
+      }
+    },
+    {
+      "index": 14,
+      "txId": "TX-0014-14DI",
+      "timestamp": "2026-11-05T01:14:41.607Z",
+      "type": "STUDIO_SYNTH",
+      "skuOrRef": "CAT-1606",
+      "summary": "Muse Image (512x512 (1:1 Ref)): \"NVIDIA GeForce RTX 4070 12GB Dual-Fan\"",
+      "prevHash": "b522d3728de3c31e61e22829403276c36f345797ae776860327b0bf5319290da",
+      "txHash": "87e4ed180bed16dde328457034ef43875f1543c59cbed0a21f2af5498ed3d6da",
+      "reversible": false,
+      "rolledBack": false,
+      "undo": {
+        "kind": "NONE"
+      },
+      "metadata": {
+        "resolution": "512x512 (1:1 Ref)",
+        "usedLiveApi": true
+      }
+    },
+    {
+      "index": 13,
+      "txId": "TX-0013-GY2M",
+      "timestamp": "2026-11-05T01:14:21.358Z",
+      "type": "WASM_REPRICE",
+      "skuOrRef": "SKU-AMD-RYZEN-7",
+      "summary": "50ms Policy Sandbox (2ms exec, 30% margin): $399.99 -> $535.86",
+      "prevHash": "0320791abf66ef9591ca58de121d6b8f7367cee040f2583751fbdaec5b968916",
+      "txHash": "b522d3728de3c31e61e22829403276c36f345797ae776860327b0bf5319290da",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_PRICE",
+        "sku": "SKU-AMD-RYZEN-7",
+        "previousPriceUsd": 399.99
+      },
+      "metadata": {
+        "sandboxEngine": "quickjs-wasm",
+        "sandboxExecMs": 2,
+        "llmSynthMs": 4371,
+        "invariantsPassed": true,
+        "policyModel": "muse-wonder-1.0 (Meta Model API)"
+      }
+    },
+    {
+      "index": 12,
+      "txId": "TX-0012-KN68",
+      "timestamp": "2026-11-05T01:14:21.356Z",
+      "type": "WASM_REPRICE",
+      "skuOrRef": "SKU-MB-B760",
+      "summary": "50ms Policy Sandbox (2ms exec, 30% margin): $189.99 -> $242.00",
+      "prevHash": "c32261353b16921d59bee1d143c5e11c6a5d514e515ae0bf5f092c10336898af",
+      "txHash": "0320791abf66ef9591ca58de121d6b8f7367cee040f2583751fbdaec5b968916",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_PRICE",
+        "sku": "SKU-MB-B760",
+        "previousPriceUsd": 189.99
+      },
+      "metadata": {
+        "sandboxEngine": "quickjs-wasm",
+        "sandboxExecMs": 2,
+        "llmSynthMs": 4371,
+        "invariantsPassed": true,
+        "policyModel": "muse-wonder-1.0 (Meta Model API)"
+      }
+    },
+    {
+      "index": 11,
+      "txId": "TX-0011-GZXF",
+      "timestamp": "2026-11-05T01:14:21.354Z",
+      "type": "WASM_REPRICE",
+      "skuOrRef": "SKU-GPU-RTX4070",
+      "summary": "50ms Policy Sandbox (2ms exec, 30% margin): $599.99 -> $829.71",
+      "prevHash": "5d70e0db9b9a7b014d023cb738f506c85eb6f539c604b088b30ecee306e2ed5f",
+      "txHash": "c32261353b16921d59bee1d143c5e11c6a5d514e515ae0bf5f092c10336898af",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_PRICE",
+        "sku": "SKU-GPU-RTX4070",
+        "previousPriceUsd": 599.99
+      },
+      "metadata": {
+        "sandboxEngine": "quickjs-wasm",
+        "sandboxExecMs": 2,
+        "llmSynthMs": 4371,
+        "invariantsPassed": true,
+        "policyModel": "muse-wonder-1.0 (Meta Model API)"
+      }
+    },
+    {
+      "index": 10,
+      "txId": "TX-0010-AF48",
+      "timestamp": "2026-11-05T01:14:21.348Z",
+      "type": "STOCK_DELTA",
+      "skuOrRef": "SKU-AMD-RYZEN-7",
+      "summary": "AMD Ryzen 7 7800X3D: stock 32 -> 33 (+1)",
+      "prevHash": "b075161c4466bbc668c049c38049c50fdf55d935a4da721bb029165a188ed212",
+      "txHash": "5d70e0db9b9a7b014d023cb738f506c85eb6f539c604b088b30ecee306e2ed5f",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-AMD-RYZEN-7",
+        "previousStock": 32
+      },
+      "metadata": {
+        "previousStock": 32,
+        "newStock": 33,
+        "delta": 1
+      }
+    },
+    {
+      "index": 9,
+      "txId": "TX-0009-MF2W",
+      "timestamp": "2026-11-05T01:14:21.348Z",
+      "type": "STOCK_DELTA",
+      "skuOrRef": "SKU-MB-B760",
+      "summary": "MSI MAG B760 Tomahawk WiFi: stock 34 -> 35 (+1)",
+      "prevHash": "787bb24f725e7ff95da5c6b67b02766c0f16017432240bcc9cc4ee69f024f373",
+      "txHash": "b075161c4466bbc668c049c38049c50fdf55d935a4da721bb029165a188ed212",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-MB-B760",
+        "previousStock": 34
+      },
+      "metadata": {
+        "previousStock": 34,
+        "newStock": 35,
+        "delta": 1
+      }
+    },
+    {
+      "index": 8,
+      "txId": "TX-0008-D2TI",
+      "timestamp": "2026-11-05T01:14:21.348Z",
+      "type": "STOCK_DELTA",
+      "skuOrRef": "SKU-GPU-RTX4070",
+      "summary": "NVIDIA GeForce RTX 4070 12GB: stock 48 -> 49 (+1)",
+      "prevHash": "edb005f419cbc1fe6ab334022384865c113a0bd4d5d89298617c2324592df957",
+      "txHash": "787bb24f725e7ff95da5c6b67b02766c0f16017432240bcc9cc4ee69f024f373",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-GPU-RTX4070",
+        "previousStock": 48
+      },
+      "metadata": {
+        "previousStock": 48,
+        "newStock": 49,
+        "delta": 1
+      }
+    },
+    {
+      "index": 7,
+      "txId": "TX-0007-0NBO",
+      "timestamp": "2026-11-05T01:13:45.409Z",
+      "type": "GUARDRAIL_AUTHORIZED",
+      "skuOrRef": "CLM-476",
+      "summary": "Operator authorized -$66.30 USD via LOCAL_LEDGER_ONLY",
+      "prevHash": "e67ce9563bb96b715b32eb5df73aab9f613b3043df7175acac68ed70cc4a2d5a",
+      "txHash": "edb005f419cbc1fe6ab334022384865c113a0bd4d5d89298617c2324592df957",
+      "reversible": false,
+      "rolledBack": false,
+      "undo": {
+        "kind": "NONE"
+      },
+      "metadata": {
+        "externalReceiptId": "LEDGER-MW2UQZZY",
+        "deliveredExternally": false
+      }
+    },
+    {
+      "index": 6,
+      "txId": "TX-0006-DDG2",
+      "timestamp": "2026-11-05T01:13:21.010Z",
+      "type": "STUDIO_SYNTH",
+      "skuOrRef": "CAT-1008",
+      "summary": "Muse Image (512x512 (1:1 Ref)): \"Corsair RM1000x Shift 80 PLUS Gold ATX 3.0 Modular Power Supply\"",
+      "prevHash": "49453d3a65d82b96fbd45dec86a3ece5d6793093f5a0eaa7e8e0568a0e9097f3",
+      "txHash": "e67ce9563bb96b715b32eb5df73aab9f613b3043df7175acac68ed70cc4a2d5a",
+      "reversible": false,
+      "rolledBack": false,
+      "undo": {
+        "kind": "NONE"
+      },
+      "metadata": {
+        "resolution": "512x512 (1:1 Ref)",
+        "usedLiveApi": true
+      }
+    },
+    {
+      "index": 5,
+      "txId": "TX-0005-ZG7N",
+      "timestamp": "2026-11-05T01:12:59.313Z",
+      "type": "WASM_REPRICE",
+      "skuOrRef": "SKU-NVME-2TB-GEN4",
+      "summary": "50ms Policy Sandbox (2ms exec, 32% margin): $185.00 -> $206.62",
+      "prevHash": "1baed60188b6c8ee4c7b2d7100101d2b9dc83764db13bbd9c5a23e716ff44664",
+      "txHash": "49453d3a65d82b96fbd45dec86a3ece5d6793093f5a0eaa7e8e0568a0e9097f3",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_PRICE",
+        "sku": "SKU-NVME-2TB-GEN4",
+        "previousPriceUsd": 185
+      },
+      "metadata": {
+        "sandboxEngine": "quickjs-wasm",
+        "sandboxExecMs": 2,
+        "llmSynthMs": 6009,
+        "invariantsPassed": true,
+        "policyModel": "muse-wonder-1.0 (Meta Model API)"
+      }
+    },
+    {
+      "index": 4,
+      "txId": "TX-0004-77O4",
+      "timestamp": "2026-11-05T01:12:59.311Z",
+      "type": "WASM_REPRICE",
+      "skuOrRef": "SKU-DDR5-32GB-KIT",
+      "summary": "50ms Policy Sandbox (2ms exec, 32% margin): $158.00 -> $171.58",
+      "prevHash": "559f06a900cf37bf79b6587d973959d8347b2ef9906f2e08f61279c3282441eb",
+      "txHash": "1baed60188b6c8ee4c7b2d7100101d2b9dc83764db13bbd9c5a23e716ff44664",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_PRICE",
+        "sku": "SKU-DDR5-32GB-KIT",
+        "previousPriceUsd": 158
+      },
+      "metadata": {
+        "sandboxEngine": "quickjs-wasm",
+        "sandboxExecMs": 2,
+        "llmSynthMs": 6009,
+        "invariantsPassed": true,
+        "policyModel": "muse-wonder-1.0 (Meta Model API)"
+      }
+    },
+    {
+      "index": 3,
+      "txId": "TX-0003-367I",
+      "timestamp": "2026-11-05T01:12:59.307Z",
+      "type": "STOCK_DELTA",
+      "skuOrRef": "SKU-NVME-2TB-GEN4",
+      "summary": "M.2 NVMe PCIe 4.0 SSD 2TB: stock 8 -> 9 (+1)",
+      "prevHash": "87fb178591d3407f815af1f555f2f9c144bede017b97ee1123ed3e96d31fb56d",
+      "txHash": "559f06a900cf37bf79b6587d973959d8347b2ef9906f2e08f61279c3282441eb",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-NVME-2TB-GEN4",
+        "previousStock": 8
+      },
+      "metadata": {
+        "previousStock": 8,
+        "newStock": 9,
+        "delta": 1
+      }
+    },
+    {
+      "index": 2,
+      "txId": "TX-0002-8208",
+      "timestamp": "2026-11-05T01:12:59.306Z",
+      "type": "STOCK_DELTA",
+      "skuOrRef": "SKU-DDR5-32GB-KIT",
+      "summary": "Fury Beast DDR5 32GB (2x16GB) Black: stock 14 -> 16 (+2)",
+      "prevHash": "a2e2776557728e7739ada78c6e8a7a7c20e56f6b9a6dc62a8a7d8b693a012a43",
+      "txHash": "87fb178591d3407f815af1f555f2f9c144bede017b97ee1123ed3e96d31fb56d",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "RESTORE_STOCK",
+        "sku": "SKU-DDR5-32GB-KIT",
+        "previousStock": 14
+      },
+      "metadata": {
+        "previousStock": 14,
+        "newStock": 16,
+        "delta": 2
+      }
+    },
+    {
+      "index": 1,
+      "txId": "TX-0001-I9NT",
+      "timestamp": "2026-11-05T01:12:59.303Z",
+      "type": "SUPPLIER_CLAIM",
+      "skuOrRef": "CLM-476",
+      "summary": "Defect claim -$66.30 USD (CRITICAL, factor=0.85, HELD_WAITING_VOICE_AUTH): Crushed heatsink fin on copper-heatpipe tower cooler with bent fins compromising thermal performance",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "txHash": "a2e2776557728e7739ada78c6e8a7a7c20e56f6b9a6dc62a8a7d8b693a012a43",
+      "reversible": true,
+      "rolledBack": false,
+      "undo": {
+        "kind": "REVOKE_CLAIM",
+        "ticketId": "CLM-476"
+      },
+      "metadata": {
+        "amountUsd": 66.3,
+        "baseCostUsd": 78,
+        "damageFactor": 0.85,
+        "defectSeverity": "CRITICAL",
+        "guardrailStatus": "HELD_WAITING_VOICE_AUTH"
+      }
+    }
+  ]
 }
